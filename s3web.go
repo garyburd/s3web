@@ -282,7 +282,7 @@ func runPush() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: s3web dir serve|push|secret\n")
+	fmt.Fprintf(os.Stderr, "usage: s3web dir test|push|secret\n")
 	flag.PrintDefaults()
 	os.Exit(2)
 }
