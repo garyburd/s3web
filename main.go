@@ -19,53 +19,56 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/garyburd/indigo/server"
-	"github.com/garyburd/indigo/web"
 	"io"
 	"io/ioutil"
-	"launchpad.net/goamz/aws"
-	"launchpad.net/goamz/s3"
 	"log"
 	"mime"
-	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
+
+	"launchpad.net/goamz/aws"
+	"launchpad.net/goamz/s3"
 )
 
 var (
-	rootDir      string
-	httpAddr     = flag.String("http", ":8080", "serve locally at this address")
-	dryRun       = flag.Bool("n", false, "Dry run.  Don't upload or delete during deploy")
-	ignoredError = errors.New("s3web: file ignored")
+	rootDir     string
+	httpAddr    = flag.String("http", ":8080", "serve locally at this address")
+	dryRun      = flag.Bool("n", false, "Dry run.  Don't upload or delete during deploy")
+	errNotFound = errors.New("s3web: file ignored")
+	errorKey    string
+	bucket      string
+	accessKey   string
 )
 
-var config = struct {
-	Index       string
-	Error       string
-	Bucket      string
-	AccessKey   string
-	DefaultType string
-}{
-	DefaultType: "text/html; charset=utf-8",
-}
-
 func readConfig() {
-	b, err := ioutil.ReadFile(filepath.Join(rootDir, "_config.json"))
+	p, err := ioutil.ReadFile(filepath.Join(rootDir, "_config.txt"))
 	if err != nil {
 		log.Fatalf("Error reading configuration, %v", err)
 	}
-	err = json.Unmarshal(b, &config)
-	if err != nil {
-		log.Fatalf("Error reading configuration, %v", err)
+	fm := parseFrontMatter(p)
+	if fm == nil {
+		log.Fatalf("Error reading configuration file")
+	}
+	for k, v := range fm {
+		switch k {
+		case "error":
+			errorKey = v
+		case "bucket":
+			bucket = v
+		case "accessKey":
+			accessKey = v
+		default:
+			log.Fatal("Unknown configuration key, %s", k)
+		}
 	}
 }
 
@@ -76,7 +79,7 @@ func getSecret() (string, error) {
 		"find-generic-password",
 		"-g",
 		"-s", "aws",
-		"-a", config.AccessKey)
+		"-a", accessKey)
 	var b bytes.Buffer
 	c.Stderr = &b
 	err := c.Run()
@@ -98,7 +101,7 @@ func setSecret(secret string) error {
 		"add-generic-password",
 		"-U",
 		"-s", "aws",
-		"-a", config.AccessKey,
+		"-a", accessKey,
 		"-p", secret)
 	var b bytes.Buffer
 	c.Stderr = &b
@@ -128,63 +131,51 @@ func runSecret() {
 	}
 }
 
-func readKey(key string) ([]byte, string, error) {
-	_, name := path.Split(key)
-	if name[0] == '.' || name[0] == '_' {
-		return nil, "", ignoredError
-	}
+func readResource(key string) ([]byte, string, error) {
 	fname := filepath.Join(rootDir, filepath.FromSlash(key))
 	b, err := ioutil.ReadFile(fname)
+	if err != nil {
+		return nil, "", errNotFound
+	}
+	b, err = evalPage(fname, b)
 	if err != nil {
 		return nil, "", err
 	}
 	mimeType := mime.TypeByExtension(path.Ext(fname))
 	if mimeType == "" {
-		mimeType = config.DefaultType
+		mimeType = "text/html; charset=utf-8"
 	}
 	return b, mimeType, nil
 }
 
-func rootHandler(resp web.Response, req *web.Request) error {
-
-	key := req.URL.Path[1:]
+func handler(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Path[1:]
 	if key == "" {
-		key = config.Index
+		key = "index.html"
 	}
-
-	var status = web.StatusOK
-	b, mimeType, err := readKey(key)
-	if err != nil && config.Error != "" {
-		status = web.StatusNotFound
-		b, mimeType, err = readKey(config.Error)
+	status := 200
+	b, mimeType, err := readResource(key)
+	if err == errNotFound && errorKey != "" {
+		status = 404
+		b, mimeType, err = readResource(errorKey)
 	}
 	if err != nil {
-		return &web.Error{Status: web.StatusNotFound, Reason: err}
+		http.Error(w, err.Error(), 404)
+		return
 	}
 
-	w := resp.Start(status, web.Header{
-		web.HeaderContentLength: {strconv.Itoa(len(b))},
-		web.HeaderContentType:   {mimeType},
-	})
-	_, err = w.Write(b)
-	return err
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
+	w.WriteHeader(status)
+	w.Write(b)
 }
 
 func runTest() {
-	l, err := net.Listen("tcp", *httpAddr)
-	if err != nil {
-		log.Fatalf("Could not listen on %s, %v", *httpAddr, err)
-		return
+	s := http.Server{
+		Addr:    *httpAddr,
+		Handler: http.HandlerFunc(handler),
 	}
-	defer l.Close()
-
-	log.Printf("Listening on %s", l.Addr())
-
-	err = (&server.Server{
-		Logger:   server.LoggerFunc(server.ShortLogger),
-		Listener: l,
-		Handler:  web.HandlerFunc(rootHandler)}).Serve()
-	if err != nil {
+	if err := s.ListenAndServe(); err != nil {
 		log.Fatalf("Server return error %v", err)
 	}
 }
@@ -194,7 +185,7 @@ func runPush() {
 	if err != nil {
 		log.Fatalf("Error reading secret, %v", err)
 	}
-	bucket := s3.New(aws.Auth{config.AccessKey, secret}, aws.USEast).Bucket(config.Bucket)
+	bucket := s3.New(aws.Auth{accessKey, secret}, aws.USEast).Bucket(bucket)
 
 	// Get etags of items in bucket
 
@@ -228,7 +219,7 @@ func runPush() {
 			return err
 		}
 
-		if _, name := filepath.Split(fname); name[0] == '.' || name[0] == '_' {
+		if _, n := filepath.Split(fname); n[0] == '.' || n[0] == '_' {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
@@ -240,12 +231,13 @@ func runPush() {
 		}
 
 		key := filepath.ToSlash(fname[1+len(rootDir):])
-		data, mimeType, err := readKey(key)
+		data, mimeType, err := readResource(key)
 		if err != nil {
-			if err != ignoredError {
+			if err == errNotFound {
+				delete(sums, key)
+			} else {
 				log.Println(err)
 			}
-			delete(sums, key)
 			return nil
 		}
 
