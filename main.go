@@ -150,8 +150,11 @@ func readResource(key string) ([]byte, string, error) {
 
 func handler(w http.ResponseWriter, r *http.Request) {
 	key := r.URL.Path[1:]
-	if key == "" {
+	switch {
+	case key == "":
 		key = "index.html"
+	case key[len(key)-1] == '/':
+		key += "index.html"
 	}
 	status := 200
 	b, mimeType, err := readResource(key)
