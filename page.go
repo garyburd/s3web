@@ -21,6 +21,7 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
+	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -102,6 +103,11 @@ func (ctx *pageContext) resolvePath(fname string) string {
 		fname = filepath.Join(ctx.fileDir, filepath.FromSlash(fname))
 	}
 	return fname
+}
+
+func (ctx *pageContext) Include(fname string) (string, error) {
+	p, err := ioutil.ReadFile(ctx.resolvePath(fname))
+	return string(p), err
 }
 
 func (ctx *pageContext) Image(fname string, attrs ...string) (string, error) {
