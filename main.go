@@ -34,9 +34,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
+	"time"
 
-	"launchpad.net/goamz/aws"
-	"launchpad.net/goamz/s3"
+	"github.com/kr/s3"
 )
 
 var (
@@ -64,6 +65,9 @@ func readConfig() {
 			errorKey = v
 		case "bucket":
 			bucket = v
+			if !strings.HasSuffix(bucket, "/") {
+				bucket += "/"
+			}
 		case "accessKey":
 			accessKey = v
 		default:
@@ -188,28 +192,31 @@ func runPush() {
 	if err != nil {
 		log.Fatalf("Error reading secret, %v", err)
 	}
-	bucket := s3.New(aws.Auth{accessKey, secret}, aws.USEast).Bucket(bucket)
+	keys := s3.Keys{AccessKey: accessKey, SecretKey: secret}
 
-	// Get etags of items in bucket
+	// Get bucket list.
 
-	r, err := bucket.GetReader("/")
+	req, _ := http.NewRequest("GET", bucket, nil)
+	req.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
+	s3.Sign(req, keys)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Fatalf("Error reading bucket, %v", err)
+		log.Fatal(err)
 	}
-	defer r.Close()
-	data, err := ioutil.ReadAll(r)
-	if err != nil {
-		log.Fatalf("Error reading bucket, %v", err)
-	}
+	defer resp.Body.Close()
+
 	var contents struct {
-		Contents []struct {
+		IsTruncated bool
+		Contents    []struct {
 			Key  string
 			ETag string
 		}
 	}
-	err = xml.Unmarshal(data, &contents)
-	if err != nil {
+	if err := xml.NewDecoder(resp.Body).Decode(&contents); err != nil {
 		log.Fatalf("Error reading bucket, %v", err)
+	}
+	if contents.IsTruncated {
+		log.Fatalf("Bucket contents truncated")
 	}
 
 	sums := make(map[string]string, len(contents.Contents))
@@ -251,10 +258,17 @@ func runPush() {
 		if sums[key] != sum {
 			log.Printf("Uploading %s %s %d", key, mimeType, len(data))
 			if !*dryRun {
-				err = bucket.Put("/"+key, data, mimeType, s3.PublicRead)
+				req, _ := http.NewRequest("PUT", bucket+key, bytes.NewReader(data))
+				req.ContentLength = int64(len(data))
+				req.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
+				req.Header.Set("Content-Type", mimeType)
+				req.Header.Set("X-Amz-Acl", "public-read")
+				s3.Sign(req, keys)
+				resp, err := http.DefaultClient.Do(req)
 				if err != nil {
-					return err
+					log.Fatal(err)
 				}
+				resp.Body.Close()
 			}
 		} else {
 			log.Printf("Skipping  %s", key)
@@ -268,10 +282,14 @@ func runPush() {
 	for key := range sums {
 		log.Printf("Deleteing %s", key)
 		if !*dryRun {
-			err = bucket.Del("/" + key)
+			req, _ := http.NewRequest("DELETE", bucket+key, nil)
+			req.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
+			s3.Sign(req, keys)
+			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				log.Fatalf("Error deleting, %v", err)
+				log.Fatal(err)
 			}
+			resp.Body.Close()
 		}
 	}
 }
