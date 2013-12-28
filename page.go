@@ -57,8 +57,8 @@ func parseFrontMatter(p []byte) map[string]string {
 }
 
 func evalPage(fname string, p []byte) ([]byte, error) {
-	page := parseFrontMatter(p)
-	if page == nil {
+	meta := parseFrontMatter(p)
+	if meta == nil {
 		return p, nil
 	}
 	t, err := template.New("").Parse(string(p))
@@ -68,10 +68,11 @@ func evalPage(fname string, p []byte) ([]byte, error) {
 	ctx := &pageContext{
 		rootDir: rootDir,
 		fileDir: filepath.Dir(fname),
-		Page:    page,
+        pathMeta: make(map[string]map[string]string),
+		Meta:    meta,
 	}
 
-	tname := page["Template"]
+	tname := meta["Template"]
 	if tname != "" {
 		tname := ctx.resolvePath(tname)
 		if _, err := t.ParseFiles(tname); err != nil {
@@ -86,7 +87,8 @@ func evalPage(fname string, p []byte) ([]byte, error) {
 type pageContext struct {
 	rootDir string
 	fileDir string
-	Page    map[string]string
+	Meta    map[string]string
+    pathMeta   map[string]map[string]string
 }
 
 func (ctx *pageContext) resolvePath(fname string) string {
@@ -103,6 +105,25 @@ func (ctx *pageContext) resolvePath(fname string) string {
 		fname = filepath.Join(ctx.fileDir, filepath.FromSlash(fname))
 	}
 	return fname
+}
+
+func (ctx *pageContext) PathMeta(fname string) (map[string]string, error) {
+    path := ctx.resolvePath(fname)
+    meta, ok := ctx.pathMeta[path]
+    if ok {
+        return meta, nil
+    }
+	p, err := ioutil.ReadFile(path)
+    if err != nil {
+        return nil, err
+    }
+	meta = parseFrontMatter(p)
+    if meta == nil {
+        meta = make(map[string]string)
+    }
+    meta["Path"] = fname
+    ctx.pathMeta[path] = meta
+    return meta, nil
 }
 
 func (ctx *pageContext) Include(fname string) (string, error) {

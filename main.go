@@ -17,6 +17,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/xml"
@@ -135,21 +136,48 @@ func runSecret() {
 	}
 }
 
-func readResource(key string) ([]byte, string, error) {
+type resource struct {
+	data   []byte
+	header http.Header
+}
+
+var compressTypes = map[string]bool{
+	"application/javascript": true,
+	"text/css":               true,
+}
+
+func readResource(key string) (*resource, error) {
 	fname := filepath.Join(rootDir, filepath.FromSlash(key))
-	b, err := ioutil.ReadFile(fname)
+	data, err := ioutil.ReadFile(fname)
 	if err != nil {
-		return nil, "", errNotFound
+		return nil, errNotFound
 	}
-	b, err = evalPage(fname, b)
+	data, err = evalPage(fname, data)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
+
 	mimeType := mime.TypeByExtension(path.Ext(fname))
 	if mimeType == "" {
-		mimeType = "text/html; charset=utf-8"
+		mimeType = "text/html"
 	}
-	return b, mimeType, nil
+
+	encoding := "identity"
+	if compressTypes[strings.Split(mimeType, ";")[0]] {
+		var buf bytes.Buffer
+		gzw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		gzw.Write(data)
+		gzw.Close()
+		data = buf.Bytes()
+		encoding = "gzip"
+	}
+
+	return &resource{data: data,
+		header: http.Header{
+			"Content-Type":     {mimeType},
+			"Content-Length":   {strconv.Itoa(len(data))},
+			"Content-Encoding": {encoding},
+		}}, nil
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
@@ -161,20 +189,21 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		key += "index.html"
 	}
 	status := 200
-	b, mimeType, err := readResource(key)
+	rsrc, err := readResource(key)
 	if err == errNotFound && errorKey != "" {
 		status = 404
-		b, mimeType, err = readResource(errorKey)
+		rsrc, err = readResource(errorKey)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), 404)
 		return
 	}
 
-	w.Header().Set("Content-Type", mimeType)
-	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
+	for k, v := range rsrc.header {
+		w.Header()[k] = v
+	}
 	w.WriteHeader(status)
-	w.Write(b)
+	w.Write(rsrc.data)
 }
 
 func runTest() {
@@ -241,7 +270,7 @@ func runPush() {
 		}
 
 		key := filepath.ToSlash(fname[1+len(rootDir):])
-		data, mimeType, err := readResource(key)
+		rsrc, err := readResource(key)
 		if err != nil {
 			if err == errNotFound {
 				delete(sums, key)
@@ -252,17 +281,19 @@ func runPush() {
 		}
 
 		h := md5.New()
-		h.Write(data)
+		h.Write(rsrc.data)
 		sum := hex.EncodeToString(h.Sum(nil))
 
 		if sums[key] != sum {
-			log.Printf("Uploading %s %s %d", key, mimeType, len(data))
+			log.Printf("Uploading %s %v", key, rsrc.header)
 			if !*dryRun {
-				req, _ := http.NewRequest("PUT", bucket+key, bytes.NewReader(data))
-				req.ContentLength = int64(len(data))
+				req, _ := http.NewRequest("PUT", bucket+key, bytes.NewReader(rsrc.data))
+				req.ContentLength = int64(len(rsrc.data))
 				req.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
-				req.Header.Set("Content-Type", mimeType)
 				req.Header.Set("X-Amz-Acl", "public-read")
+				for k, v := range rsrc.header {
+					req.Header[k] = v
+				}
 				s3.Sign(req, keys)
 				resp, err := http.DefaultClient.Do(req)
 				if err != nil {
