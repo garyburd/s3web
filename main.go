@@ -258,7 +258,7 @@ func runPush() {
 			return err
 		}
 
-		if _, n := filepath.Split(fname); n[0] == '.' || n[0] == '_' {
+		if _, n := filepath.Split(fname); n != ".well-known" && (n[0] == '.' || n[0] == '_') {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}

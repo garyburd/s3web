@@ -66,10 +66,10 @@ func evalPage(fname string, p []byte) ([]byte, error) {
 		return nil, err
 	}
 	ctx := &pageContext{
-		rootDir: rootDir,
-		fileDir: filepath.Dir(fname),
-        pathMeta: make(map[string]map[string]string),
-		Meta:    meta,
+		rootDir:  rootDir,
+		fileDir:  filepath.Dir(fname),
+		pathMeta: make(map[string]map[string]string),
+		Meta:     meta,
 	}
 
 	tname := meta["Template"]
@@ -85,10 +85,10 @@ func evalPage(fname string, p []byte) ([]byte, error) {
 }
 
 type pageContext struct {
-	rootDir string
-	fileDir string
-	Meta    map[string]string
-    pathMeta   map[string]map[string]string
+	rootDir  string
+	fileDir  string
+	Meta     map[string]string
+	pathMeta map[string]map[string]string
 }
 
 func (ctx *pageContext) resolvePath(fname string) string {
@@ -108,22 +108,22 @@ func (ctx *pageContext) resolvePath(fname string) string {
 }
 
 func (ctx *pageContext) PathMeta(fname string) (map[string]string, error) {
-    path := ctx.resolvePath(fname)
-    meta, ok := ctx.pathMeta[path]
-    if ok {
-        return meta, nil
-    }
+	path := ctx.resolvePath(fname)
+	meta, ok := ctx.pathMeta[path]
+	if ok {
+		return meta, nil
+	}
 	p, err := ioutil.ReadFile(path)
-    if err != nil {
-        return nil, err
-    }
+	if err != nil {
+		return nil, err
+	}
 	meta = parseFrontMatter(p)
-    if meta == nil {
-        meta = make(map[string]string)
-    }
-    meta["Path"] = fname
-    ctx.pathMeta[path] = meta
-    return meta, nil
+	if meta == nil {
+		meta = make(map[string]string)
+	}
+	meta["Path"] = fname
+	ctx.pathMeta[path] = meta
+	return meta, nil
 }
 
 func (ctx *pageContext) Include(fname string) (string, error) {
