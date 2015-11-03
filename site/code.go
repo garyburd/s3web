@@ -12,7 +12,7 @@
 // License for the specific language governing permissions and limitations
 // under the License.
 
-package main
+package site
 
 import (
 	"bytes"
@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"regexp"
-	"text/template"
 )
 
 var (
@@ -30,8 +29,8 @@ var (
 	omitNl     = []byte("OMIT\n")
 )
 
-func (ctx *pageContext) Code(fname string, patterns ...string) (string, error) {
-	p, err := ioutil.ReadFile(ctx.resolvePath(fname))
+func (td *templateData) Code(path string, patterns ...string) (string, error) {
+	p, err := ioutil.ReadFile(td.resolvePath(path))
 	if err == nil {
 		switch len(patterns) {
 		case 0:
@@ -45,15 +44,11 @@ func (ctx *pageContext) Code(fname string, patterns ...string) (string, error) {
 		}
 	}
 	if err != nil {
-		return "", fmt.Errorf("Code %q %v, %v", fname, patterns, err)
+		return "", fmt.Errorf("Code %q %v, %v", path, patterns, err)
 	}
 	p = bytes.TrimSuffix(p, nl)
 	p = bytes.Replace(p, tab, fourSpaces, -1)
-	var buf bytes.Buffer
-	buf.WriteString("<pre>")
-	template.HTMLEscape(&buf, p)
-	buf.WriteString("</pre>")
-	return buf.String(), nil
+	return string(p), nil
 }
 
 func oneLine(p []byte, pattern string) ([]byte, error) {

@@ -1,0 +1,6 @@
+{{/*
+Title: Page
+*/}}
+{{define "ROOT"}}The path of this document is {{.Page.Path}}.
+The path of index.html is {{(.Page "index.html").Path}}.
+{{end}}
