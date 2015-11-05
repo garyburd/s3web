@@ -53,6 +53,10 @@ func (nf NotFoundError) Error() string {
 }
 
 func New(dir string, options ...Option) (*Site, error) {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
 	s := &Site{dir: dir}
 	for _, o := range options {
 		o.f(s)

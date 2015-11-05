@@ -19,7 +19,7 @@ var commands = []struct {
 	run   func()
 }{
 	{"serve", serve.FlagSet, serve.Usage, serve.Run},
-	{"deploys3", deploys3.FlagSet, deploys3.Usage, deploys3.Run},
+	{"deploy", deploys3.FlagSet, deploys3.Usage, deploys3.Run},
 }
 
 func main() {

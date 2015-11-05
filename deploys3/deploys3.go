@@ -39,24 +39,14 @@ var (
 )
 
 type config struct {
-	Bucket  string
-	Profile string
-}
-
-type credentials struct {
-	Key    string
-	Secret string
+	Bucket string
 }
 
 func Run() {
 	if len(FlagSet.Args()) != 1 {
 		FlagSet.Usage()
 	}
-	dir, err := filepath.Abs(FlagSet.Arg(0))
-	if err != nil {
-		log.Fatal(err)
-	}
-
+	dir := FlagSet.Arg(0)
 	p, err := ioutil.ReadFile(filepath.Join(dir, filepath.FromSlash(site.ConfigDir), "s3.yml"))
 	if err != nil {
 		log.Fatal(err)
@@ -68,15 +58,13 @@ func Run() {
 		log.Fatal(err)
 	}
 
-	p, err = ioutil.ReadFile(filepath.Join(os.Getenv("HOME"), ".aws", config.Profile+".yml"))
-	if err != nil {
-		log.Fatal(err)
+	keys := s3.Keys{
+		AccessKey: os.Getenv("AWS_ACCESS_KEY_ID"),
+		SecretKey: os.Getenv("AWS_SECRET_ACCESS_KEY"),
 	}
 
-	var keys s3.Keys
-	err = yaml.Unmarshal(p, &keys)
-	if err != nil {
-		log.Fatal(err)
+	if keys.AccessKey == "" || keys.SecretKey == "" {
+		log.Fatal("Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables with AWS keys")
 	}
 
 	req, _ := http.NewRequest("GET", config.Bucket, nil)
