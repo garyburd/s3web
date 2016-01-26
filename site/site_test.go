@@ -28,24 +28,23 @@ func TestSite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths, err := s.ResourcePaths()
+	paths, err := s.Paths()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range paths {
-		fname := filepath.Join("testdata/output", filepath.FromSlash(path))
-		expected, err := ioutil.ReadFile(fname)
+		fpath := filepath.Join("testdata/output", filepath.FromSlash(path))
+		expected, err := ioutil.ReadFile(fpath)
 		if err != nil {
-			t.Errorf("ioutil.ReadFile(%q) returned error: %v", fname, err)
+			t.Errorf("ioutil.ReadFile(%q) returned error: %v", fpath, err)
 			continue
 		}
-		actual, _, err := s.Resource(path)
+		body, _, err := s.Resource(path)
 		if err != nil {
-			t.Errorf("Resource(%q) returned error: %v", path, err)
-			continue
+			t.Errorf("s.Resource(%q) returned error: %v", path, err)
 		}
-		if !bytes.Equal(expected, actual) {
-			t.Errorf("%s\n\t got: %q\n\twant: %q", path, actual, expected)
+		if !bytes.Equal(expected, body) {
+			t.Errorf("%s\n\t got: %q\n\twant: %q", path, body, expected)
 			continue
 		}
 	}

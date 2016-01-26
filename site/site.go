@@ -30,7 +30,7 @@ import (
 	"strings"
 	ttemp "text/template"
 
-	"gopkg.in/yaml.v1"
+	"gopkg.in/yaml.v2"
 )
 
 const ConfigDir = "/_config"
@@ -38,10 +38,15 @@ const ConfigDir = "/_config"
 const ErrorPage = "/error.html"
 
 type Site struct {
-	dir      string
-	compress bool
-	fronts   map[string]map[string]interface{}
-	images   map[string]image.Config
+	dir         string
+	compress    bool
+	images      map[string]image.Config
+	deployPaths map[string]string
+}
+
+type front struct {
+	Template string
+	Data     interface{}
 }
 
 type NotFoundError struct {
@@ -57,7 +62,7 @@ func New(dir string, options ...Option) (*Site, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Site{dir: dir}
+	s := &Site{dir: dir, deployPaths: make(map[string]string)}
 	for _, o := range options {
 		o.f(s)
 	}
@@ -72,29 +77,30 @@ func WithCompression(compress bool) Option {
 	}}
 }
 
-// ResourcePaths returns the paths for all resources on the site.
-func (s *Site) ResourcePaths() ([]string, error) {
+func (s *Site) Paths() ([]string, error) {
 	var paths []string
 	err := filepath.Walk(s.dir, func(fname string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-
 		if _, n := filepath.Split(fname); n != ".well-known" && (n[0] == '.' || n[0] == '_') {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-
 		if info.IsDir() {
 			return nil
 		}
-
-		paths = append(paths, filepath.ToSlash(fname[len(s.dir):]))
+		path := filepath.ToSlash(fname[len(s.dir):])
+		paths = append(paths, path)
 		return nil
 	})
 	return paths, err
+}
+
+func (s *Site) SetDeployPath(from, to string) {
+	s.deployPaths[from] = to
 }
 
 var (
@@ -109,7 +115,11 @@ var (
 
 // Resource returns the entity for the given path.
 func (s *Site) Resource(path string) ([]byte, http.Header, error) {
-	fpath, front, data, err := s.resource(path)
+	if !strings.HasPrefix(path, "/") {
+		return nil, nil, errors.New("path must start with '/'")
+	}
+	fpath := filepath.Join(s.dir, filepath.FromSlash(path[1:]))
+	front, body, err := s.readResource(fpath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -118,16 +128,16 @@ func (s *Site) Resource(path string) ([]byte, http.Header, error) {
 
 	mt := mime.TypeByExtension(filepath.Ext(fpath))
 	if mt == "" {
-		mt = "text/html"
+		mt = "text/html; charset=utf-8"
 	}
 
-	// If resource has front matter, then execute template.
+	// Execute template
 
-	if front != nil {
-		td := &templateData{path: path, s: s, front: front}
+	if front.Template != "NONE" {
+		ctx := &templateContext{path: path, s: s}
 		var files []string
-		if path, _ := front["Template"].(string); path != "" {
-			files = append(files, td.resolvePath(path))
+		if front.Template != "" {
+			files = append(files, ctx.filePath(front.Template))
 		}
 		files = append(files, fpath)
 
@@ -135,20 +145,20 @@ func (s *Site) Resource(path string) ([]byte, http.Header, error) {
 			ExecuteTemplate(wr io.Writer, name string, data interface{}) error
 		}
 		if typeSubtype(mt) == "text/html" {
-			tmpl, err = htemp.ParseFiles(files...)
+			tmpl, err = htemp.New("").Funcs(ctx.funcMap(path, s)).ParseFiles(files...)
 		} else {
-			tmpl, err = ttemp.ParseFiles(files...)
+			tmpl, err = ttemp.New("").Funcs(ctx.funcMap(path, s)).ParseFiles(files...)
 		}
 		if err != nil {
 			return nil, nil, err
 		}
 
 		var buf bytes.Buffer
-		err = tmpl.ExecuteTemplate(&buf, "ROOT", td)
+		err = tmpl.ExecuteTemplate(&buf, "ROOT", front.Data)
 		if err != nil {
 			return nil, nil, err
 		}
-		data = buf.Bytes()
+		body = buf.Bytes()
 	}
 
 	// HTTP headers.
@@ -157,19 +167,19 @@ func (s *Site) Resource(path string) ([]byte, http.Header, error) {
 	if s.compress && compressTypes[typeSubtype(mt)] {
 		var buf bytes.Buffer
 		gzw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-		gzw.Write(data)
+		gzw.Write(body)
 		gzw.Close()
-		data = buf.Bytes()
+		body = buf.Bytes()
 		encoding = "gzip"
 	}
 
 	header := http.Header{
 		"Content-Type":     {mt},
 		"Content-Encoding": {encoding},
-		"Content-Length":   {strconv.Itoa(len(data))},
+		"Content-Length":   {strconv.Itoa(len(body))},
 	}
 
-	return data, header, nil
+	return body, header, nil
 }
 
 func typeSubtype(mt string) string {
@@ -180,38 +190,24 @@ func typeSubtype(mt string) string {
 }
 
 // resource returns the parsed front matter (if any) and the file's contents.
-func (s *Site) resource(path string) (string, map[string]interface{}, []byte, error) {
-	if !strings.HasPrefix(path, "/") {
-		return "", nil, nil, errors.New("path must start with '/'")
-	}
-	fpath := filepath.Join(s.dir, filepath.FromSlash(path[1:]))
-
-	// Add/remove "index.html" as needed.
-	if strings.HasSuffix(path, "/") {
-		fpath = filepath.Join(fpath, "index.html")
-	} else if strings.HasSuffix(path, "/index.html") {
-		path = path[:len(path)-len("index.html")]
-	}
-
+func (s *Site) readResource(fpath string) (*front, []byte, error) {
 	data, err := ioutil.ReadFile(fpath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			err = NotFoundError{err}
 		}
-		return fpath, nil, nil, err
+		return nil, nil, err
 	}
 
-	var front map[string]interface{}
+	front := &front{Template: "NONE"}
 	if bytes.HasPrefix(data, frontStart) {
 		if i := bytes.Index(data, frontEnd); i >= 0 {
-			front = map[string]interface{}{
-				"Path": path,
-			}
+			front.Template = ""
 			err = yaml.Unmarshal(data[len(frontStart):i+1], &front)
 			if err != nil {
-				return fpath, nil, data, err
+				return front, data, err
 			}
 		}
 	}
-	return fpath, front, data, err
+	return front, data, err
 }

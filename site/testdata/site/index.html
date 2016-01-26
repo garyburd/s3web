@@ -1,5 +1,6 @@
 {{/*
-Title: Home
+data:
+  title: Home
 */}}
-{{define "ROOT"}}<html><body><h1>{{.Page.Title}}</h1>{{(.Page "page.html").Title}}</body></html>
+{{define "ROOT"}}<html><body><h1>{{.title}}</h1>{{(data "page.html").title}}</body></html>
 {{end}}

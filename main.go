@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/garyburd/s3web/deploys3"
+	"github.com/garyburd/s3web/deploy"
 	"github.com/garyburd/s3web/serve"
 )
 
@@ -19,7 +19,7 @@ var commands = []struct {
 	run   func()
 }{
 	{"serve", serve.FlagSet, serve.Usage, serve.Run},
-	{"deploy", deploys3.FlagSet, deploys3.Usage, deploys3.Run},
+	{"deploy", deploy.FlagSet, deploy.Usage, deploy.Run},
 }
 
 func main() {

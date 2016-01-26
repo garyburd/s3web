@@ -18,42 +18,47 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/garyburd/s3web/site"
 )
 
-func handler(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-	if path == "" {
+func handler(resp http.ResponseWriter, req *http.Request) {
+	path := req.URL.Path
+	switch {
+	case path == "":
 		path = "/index.html"
+	case strings.HasSuffix(path, "/"):
+		path += "index.html"
 	}
 	status := http.StatusOK
 
 	s, err := site.New(dir, site.WithCompression(true))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(resp, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	p, h, err := s.Resource(path)
+	body, header, err := s.Resource(path)
 	if _, ok := err.(site.NotFoundError); ok {
 		status = http.StatusNotFound
-		if pe, he, erre := s.Resource(site.ErrorPage); erre == nil {
-			p = pe
-			h = he
+		if b, h, erre := s.Resource(site.ErrorPage); erre == nil {
+			body = b
+			header = h
 		} else {
-			p = []byte(err.Error())
-			h = http.Header{"Content-Type": {"text/plain"}}
+			body = []byte(err.Error())
+			header = http.Header{"Content-Type": {"text/plain"}}
 		}
 	} else if err != nil {
 		status = http.StatusInternalServerError
-		p = []byte(err.Error())
-		h = http.Header{"Content-Type": {"text/plain"}}
+		body = []byte(err.Error())
+		header = http.Header{"Content-Type": {"text/plain"}}
 	}
-	for k, v := range h {
-		w.Header()[k] = v
+	for k, v := range header {
+		resp.Header()[k] = v
 	}
-	w.WriteHeader(status)
-	w.Write(p)
+	resp.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	resp.WriteHeader(status)
+	resp.Write(body)
 }
 
 var (
