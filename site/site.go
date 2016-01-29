@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"fmt"
 	htemp "html/template"
 	"image"
 	"io"
@@ -205,7 +206,7 @@ func (s *Site) readResource(fpath string) (*front, []byte, error) {
 			front.Template = ""
 			err = yaml.Unmarshal(data[len(frontStart):i+1], &front)
 			if err != nil {
-				return front, data, err
+				return front, data, fmt.Errorf("%s: %v", fpath, err)
 			}
 		}
 	}

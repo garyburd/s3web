@@ -38,13 +38,13 @@ import (
 )
 
 var (
-	FlagSet         = flag.NewFlagSet("deploy", flag.ExitOnError)
-	Usage           = "deploy dir"
-	dryRun          = FlagSet.Bool("n", false, "Dry run")
-	force           = FlagSet.Bool("f", false, "Force upload of all files")
-	bustPat         = regexp.MustCompile(`-X\.[^/]*$`)
-	bustDeployPat   = regexp.MustCompile(`-[0-9A-F]{8}\.[^/]*$`)
-	castagnoliTable = crc32.MakeTable(crc32.Castagnoli)
+	FlagSet            = flag.NewFlagSet("deploy", flag.ExitOnError)
+	Usage              = "deploy dir"
+	dryRun             = FlagSet.Bool("n", false, "Dry run")
+	force              = FlagSet.Bool("f", false, "Force upload of all files")
+	versionPat         = regexp.MustCompile(`-X\.[^/]*$`)
+	deployedVersionPat = regexp.MustCompile(`-[0-9A-F]{8}\.[^/]*$`)
+	castagnoliTable    = crc32.MakeTable(crc32.Castagnoli)
 )
 
 type config struct {
@@ -52,9 +52,13 @@ type config struct {
 	MaxAge int
 }
 
+// object represent an S3 object
 type object struct {
-	Key  string
-	ETag string
+	Key          string
+	ETag         string
+	LastModified time.Time
+
+	keep bool
 }
 
 type byUploadOrder []string
@@ -62,8 +66,8 @@ type byUploadOrder []string
 func (p byUploadOrder) Len() int      { return len(p) }
 func (p byUploadOrder) Swap(i, j int) { p[i], p[j] = p[j], p[i] }
 func (p byUploadOrder) Less(i, j int) bool {
-	mi := bustPat.MatchString(p[i])
-	mj := bustPat.MatchString(p[j])
+	mi := versionPat.MatchString(p[i])
+	mj := versionPat.MatchString(p[j])
 	if mi != mj {
 		return mi
 	}
@@ -100,6 +104,8 @@ func Run() {
 		log.Fatal(err)
 	}
 
+	markKeepers(objects, config.MaxAge)
+
 	s, err := site.New(dir, site.WithCompression(true))
 	if err != nil {
 		log.Fatal(err)
@@ -116,7 +122,7 @@ func Run() {
 			log.Fatal(err)
 		}
 		deployPath := path
-		if m := bustPat.FindStringIndex(path); m != nil {
+		if m := versionPat.FindStringIndex(path); m != nil {
 			sum := crc32.Checksum(body, castagnoliTable)
 			deployPath = fmt.Sprintf("%s-%08X.%s", path[:m[0]], sum, path[m[0]+3:])
 			s.SetDeployPath(path, deployPath)
@@ -124,11 +130,11 @@ func Run() {
 		if o := objects[deployPath[1:]]; o != nil {
 			delete(objects, o.Key)
 			if !*force && o.ETag == fmt.Sprintf(`"%x"`, md5.Sum(body)) {
-				log.Printf("Skipping  %s", path)
+				log.Printf("OK     %s", deployPath)
 				continue
 			}
 		}
-		log.Printf("Uploading %s to %s %v", path, deployPath, header)
+		log.Printf("UPLOAD %s", deployPath)
 		if *dryRun {
 			continue
 		}
@@ -139,12 +145,16 @@ func Run() {
 		}
 	}
 
-	for key := range objects {
-		log.Printf("Deleteing %s", key)
+	for _, o := range objects {
+		if o.keep {
+			log.Printf("SAVE   /%s", o.Key)
+			continue
+		}
+		log.Printf("DELETE /%s", o.Key)
 		if *dryRun {
 			continue
 		}
-		if err := del(keys, config.Bucket+"/"+key); err != nil {
+		if err := del(keys, config.Bucket+"/"+o.Key); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -238,4 +248,26 @@ func readConfig(dir string) (*config, error) {
 	}
 
 	return &config, nil
+}
+
+func markKeepers(objects map[string]*object, maxAge int) {
+	keepers := make(map[string]*object)
+	cutoff := time.Now().Add(-2 * time.Duration(maxAge) * time.Second)
+	for _, o := range objects {
+		m := deployedVersionPat.FindStringIndex(o.Key)
+		if m == nil {
+			continue
+		}
+		if o.LastModified.After(cutoff) {
+			o.keep = true
+			continue
+		}
+		key := o.Key[:m[0]] + o.Key[m[0]+9:]
+		if oo := keepers[key]; oo == nil || oo.LastModified.Before(o.LastModified) {
+			keepers[key] = o
+		}
+	}
+	for _, o := range keepers {
+		o.keep = true
+	}
 }
