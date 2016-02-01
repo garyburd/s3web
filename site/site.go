@@ -48,6 +48,7 @@ type Site struct {
 type front struct {
 	Template string
 	Data     interface{}
+	Redirect string
 }
 
 type NotFoundError struct {
@@ -178,6 +179,10 @@ func (s *Site) Resource(path string) ([]byte, http.Header, error) {
 		"Content-Type":     {mt},
 		"Content-Encoding": {encoding},
 		"Content-Length":   {strconv.Itoa(len(body))},
+	}
+
+	if front.Redirect != "" {
+		header.Set("Location", front.Redirect)
 	}
 
 	return body, header, nil

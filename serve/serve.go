@@ -52,6 +52,8 @@ func handler(resp http.ResponseWriter, req *http.Request) {
 		status = http.StatusInternalServerError
 		body = []byte(err.Error())
 		header = http.Header{"Content-Type": {"text/plain"}}
+	} else if header.Get("Location") != "" {
+		status = 302
 	}
 	for k, v := range header {
 		resp.Header()[k] = v

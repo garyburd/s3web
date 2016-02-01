@@ -141,6 +141,10 @@ func Run() {
 		if *dryRun {
 			continue
 		}
+		if l := header.Get("Location"); l != "" {
+			header.Del("Location")
+			header.Set("X-Amz-Website-Redirect-Location", l)
+		}
 		header.Set("X-Amz-Acl", "public-read")
 		header.Set("Cache-Control", fmt.Sprintf("max-age=%d", maxAge))
 		if err := put(keys, config.Bucket+deployPath, body, header); err != nil {
