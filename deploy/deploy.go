@@ -48,8 +48,9 @@ var (
 )
 
 type config struct {
-	Bucket string
-	MaxAge int
+	Bucket          string
+	MaxAge          int
+	MaxAgeVersioned int
 }
 
 // object represent an S3 object
@@ -122,10 +123,12 @@ func Run() {
 			log.Fatal(err)
 		}
 		deployPath := path
+		maxAge := config.MaxAge
 		if m := versionPat.FindStringIndex(path); m != nil {
 			sum := crc32.Checksum(body, castagnoliTable)
 			deployPath = fmt.Sprintf("%s-%08X.%s", path[:m[0]], sum, path[m[0]+3:])
 			s.SetDeployPath(path, deployPath)
+			maxAge = config.MaxAgeVersioned
 		}
 		if o := objects[deployPath[1:]]; o != nil {
 			delete(objects, o.Key)
@@ -139,7 +142,7 @@ func Run() {
 			continue
 		}
 		header.Set("X-Amz-Acl", "public-read")
-		header.Set("Cache-Control", fmt.Sprintf("max-age=%d", config.MaxAge))
+		header.Set("Cache-Control", fmt.Sprintf("max-age=%d", maxAge))
 		if err := put(keys, config.Bucket+deployPath, body, header); err != nil {
 			log.Fatal(err)
 		}
@@ -246,7 +249,9 @@ func readConfig(dir string) (*config, error) {
 	if config.MaxAge == 0 {
 		config.MaxAge = 60 * 60
 	}
-
+	if config.MaxAgeVersioned == 0 {
+		config.MaxAgeVersioned = 24 * 60 * 60
+	}
 	return &config, nil
 }
 
