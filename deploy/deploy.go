@@ -20,37 +20,29 @@ import (
 	"encoding/xml"
 	"flag"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/garyburd/s3web/site"
 	"github.com/kr/s3"
-	"gopkg.in/yaml.v1"
+	"gopkg.in/yaml.v2"
 )
 
 var (
-	FlagSet            = flag.NewFlagSet("deploy", flag.ExitOnError)
-	Usage              = "deploy dir"
-	dryRun             = FlagSet.Bool("n", false, "Dry run")
-	force              = FlagSet.Bool("f", false, "Force upload of all files")
-	versionPat         = regexp.MustCompile(`-X\.[^/]*$`)
-	deployedVersionPat = regexp.MustCompile(`-[0-9A-F]{8}\.[^/]*$`)
-	castagnoliTable    = crc32.MakeTable(crc32.Castagnoli)
+	FlagSet = flag.NewFlagSet("deploy", flag.ExitOnError)
+	Usage   = "deploy dir"
+	dryRun  = FlagSet.Bool("n", false, "Dry run")
+	force   = FlagSet.Bool("f", false, "Force upload of all files")
 )
 
 type config struct {
-	Bucket          string
-	MaxAge          int
-	MaxAgeVersioned int
+	Bucket string
+	MaxAge int
 }
 
 // object represent an S3 object
@@ -58,26 +50,6 @@ type object struct {
 	Key          string
 	ETag         string
 	LastModified time.Time
-
-	keep bool
-}
-
-type byUploadOrder []string
-
-func (p byUploadOrder) Len() int      { return len(p) }
-func (p byUploadOrder) Swap(i, j int) { p[i], p[j] = p[j], p[i] }
-func (p byUploadOrder) Less(i, j int) bool {
-	mi := versionPat.MatchString(p[i])
-	mj := versionPat.MatchString(p[j])
-	if mi != mj {
-		return mi
-	}
-	ci := strings.Count(p[i], "/")
-	cj := strings.Count(p[j], "/")
-	if ci != cj {
-		return ci > cj
-	}
-	return p[i] < p[j]
 }
 
 func Run() {
@@ -105,8 +77,6 @@ func Run() {
 		log.Fatal(err)
 	}
 
-	markKeepers(objects, config.MaxAge)
-
 	s, err := site.New(dir, site.WithCompression(true))
 	if err != nil {
 		log.Fatal(err)
@@ -115,7 +85,6 @@ func Run() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	sort.Sort(byUploadOrder(paths))
 
 	for _, path := range paths {
 		body, header, err := s.Resource(path)
@@ -124,12 +93,6 @@ func Run() {
 		}
 		deployPath := path
 		maxAge := config.MaxAge
-		if m := versionPat.FindStringIndex(path); m != nil {
-			sum := crc32.Checksum(body, castagnoliTable)
-			deployPath = fmt.Sprintf("%s-%08X.%s", path[:m[0]], sum, path[m[0]+3:])
-			s.SetDeployPath(path, deployPath)
-			maxAge = config.MaxAgeVersioned
-		}
 		if o := objects[deployPath[1:]]; o != nil {
 			delete(objects, o.Key)
 			if !*force && o.ETag == fmt.Sprintf(`"%x"`, md5.Sum(body)) {
@@ -153,10 +116,6 @@ func Run() {
 	}
 
 	for _, o := range objects {
-		if o.keep {
-			log.Printf("SAVE   /%s", o.Key)
-			continue
-		}
 		log.Printf("DELETE /%s", o.Key)
 		if *dryRun {
 			continue
@@ -253,30 +212,5 @@ func readConfig(dir string) (*config, error) {
 	if config.MaxAge == 0 {
 		config.MaxAge = 60 * 60
 	}
-	if config.MaxAgeVersioned == 0 {
-		config.MaxAgeVersioned = 24 * 60 * 60
-	}
 	return &config, nil
-}
-
-func markKeepers(objects map[string]*object, maxAge int) {
-	keepers := make(map[string]*object)
-	cutoff := time.Now().Add(-2 * time.Duration(maxAge) * time.Second)
-	for _, o := range objects {
-		m := deployedVersionPat.FindStringIndex(o.Key)
-		if m == nil {
-			continue
-		}
-		if o.LastModified.After(cutoff) {
-			o.keep = true
-			continue
-		}
-		key := o.Key[:m[0]] + o.Key[m[0]+9:]
-		if oo := keepers[key]; oo == nil || oo.LastModified.Before(o.LastModified) {
-			keepers[key] = o
-		}
-	}
-	for _, o := range keepers {
-		o.keep = true
-	}
 }

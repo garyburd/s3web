@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"go/build"
 	htemp "html/template"
 	"image"
 	"io/ioutil"
@@ -44,19 +43,10 @@ func (ctx *templateContext) funcMap(path string, s *Site) map[string]interface{}
 		"data":    ctx.data,
 		"image":   ctx.image,
 		"include": ctx.include,
-		"path":    ctx.deployPath,
 	}
 }
 
 func (ctx *templateContext) filePath(p string) string {
-	if strings.HasPrefix(p, "go://") {
-		d, f := path.Split(p[len("go://"):])
-		pkg, err := build.Default.Import(d, "", build.FindOnly)
-		if err != nil {
-			return p
-		}
-		return filepath.Join(pkg.Dir, f)
-	}
 	if strings.HasSuffix(p, "/") {
 		p += "index.html"
 	}
@@ -110,24 +100,13 @@ func (ctx *templateContext) image(path string, attrs ...string) (htemp.HTML, err
 	}
 
 	var buf bytes.Buffer
-	fmt.Fprintf(&buf, `<img src="%s" width="%d" height="%d"`, ctx.deployPath(path), c.Width, c.Height)
+	fmt.Fprintf(&buf, `<img src="%s" width="%d" height="%d"`, path, c.Width, c.Height)
 	for _, attr := range attrs {
 		buf.WriteByte(' ')
 		buf.WriteString(attr)
 	}
 	buf.WriteByte('>')
 	return htemp.HTML(buf.String()), nil
-}
-
-func (ctx *templateContext) deployPath(p string) string {
-	absPath := p
-	if !strings.HasPrefix(p, "/") {
-		absPath = path.Join(path.Dir(ctx.path), p)
-	}
-	if p, ok := ctx.s.deployPaths[absPath]; ok {
-		return p
-	}
-	return p
 }
 
 var (

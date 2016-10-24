@@ -39,10 +39,9 @@ const ConfigDir = "/_config"
 const ErrorPage = "/error.html"
 
 type Site struct {
-	dir         string
-	compress    bool
-	images      map[string]image.Config
-	deployPaths map[string]string
+	dir      string
+	compress bool
+	images   map[string]image.Config
 }
 
 type front struct {
@@ -64,7 +63,7 @@ func New(dir string, options ...Option) (*Site, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Site{dir: dir, deployPaths: make(map[string]string)}
+	s := &Site{dir: dir}
 	for _, o := range options {
 		o.f(s)
 	}
@@ -99,10 +98,6 @@ func (s *Site) Paths() ([]string, error) {
 		return nil
 	})
 	return paths, err
-}
-
-func (s *Site) SetDeployPath(from, to string) {
-	s.deployPaths[from] = to
 }
 
 var (
