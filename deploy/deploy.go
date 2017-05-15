@@ -16,6 +16,7 @@ package deploy
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/md5"
 	"encoding/xml"
 	"flag"
@@ -26,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/garyburd/s3web/site"
@@ -34,10 +36,15 @@ import (
 )
 
 var (
-	FlagSet = flag.NewFlagSet("deploy", flag.ExitOnError)
-	Usage   = "deploy dir"
-	dryRun  = FlagSet.Bool("n", false, "Dry run")
-	force   = FlagSet.Bool("f", false, "Force upload of all files")
+	FlagSet       = flag.NewFlagSet("deploy", flag.ExitOnError)
+	Usage         = "deploy dir"
+	dryRun        = FlagSet.Bool("n", false, "Dry run")
+	force         = FlagSet.Bool("f", false, "Force upload of all files")
+	compressTypes = map[string]bool{
+		"application/javascript": true,
+		"text/css":               true,
+		"text/html":              true,
+	}
 )
 
 type config struct {
@@ -77,7 +84,7 @@ func Run() {
 		log.Fatal(err)
 	}
 
-	s, err := site.New(dir, site.WithCompression(true))
+	s, err := site.New(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -91,16 +98,24 @@ func Run() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		deployPath := path
-		maxAge := config.MaxAge
-		if o := objects[deployPath[1:]]; o != nil {
+
+		if compressTypes[typeSubtype(header.Get("Content-Type"))] {
+			var buf bytes.Buffer
+			gzw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+			gzw.Write(body)
+			gzw.Close()
+			body = buf.Bytes()
+			header.Set("Content-Encoding", "gzip")
+		}
+
+		if o := objects[path[1:]]; o != nil {
 			delete(objects, o.Key)
 			if !*force && o.ETag == fmt.Sprintf(`"%x"`, md5.Sum(body)) {
-				log.Printf("OK     %s", deployPath)
+				log.Printf("OK     %s", path)
 				continue
 			}
 		}
-		log.Printf("UPLOAD %s", deployPath)
+		log.Printf("UPLOAD %s", path)
 		if *dryRun {
 			continue
 		}
@@ -109,8 +124,8 @@ func Run() {
 			header.Set("X-Amz-Website-Redirect-Location", l)
 		}
 		header.Set("X-Amz-Acl", "public-read")
-		header.Set("Cache-Control", fmt.Sprintf("max-age=%d", maxAge))
-		if err := put(keys, config.Bucket+deployPath, body, header); err != nil {
+		header.Set("Cache-Control", fmt.Sprintf("max-age=%d", config.MaxAge))
+		if err := put(keys, config.Bucket+path, body, header); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -213,4 +228,11 @@ func readConfig(dir string) (*config, error) {
 		config.MaxAge = 60 * 60
 	}
 	return &config, nil
+}
+
+func typeSubtype(mt string) string {
+	if i := strings.IndexByte(mt, ';'); i >= 0 {
+		mt = strings.TrimSpace(mt[:i])
+	}
+	return mt
 }

@@ -16,7 +16,6 @@ package site
 
 import (
 	"bytes"
-	"compress/gzip"
 	"errors"
 	"fmt"
 	htemp "html/template"
@@ -39,9 +38,8 @@ const ConfigDir = "/_config"
 const ErrorPage = "/error.html"
 
 type Site struct {
-	dir      string
-	compress bool
-	images   map[string]image.Config
+	dir    string
+	images map[string]image.Config
 }
 
 type front struct {
@@ -58,24 +56,13 @@ func (nf NotFoundError) Error() string {
 	return nf.err.Error()
 }
 
-func New(dir string, options ...Option) (*Site, error) {
+func New(dir string) (*Site, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
 	}
 	s := &Site{dir: dir}
-	for _, o := range options {
-		o.f(s)
-	}
 	return s, nil
-}
-
-type Option struct{ f func(*Site) }
-
-func WithCompression(compress bool) Option {
-	return Option{func(s *Site) {
-		s.compress = true
-	}}
 }
 
 func (s *Site) Paths() ([]string, error) {
@@ -101,13 +88,8 @@ func (s *Site) Paths() ([]string, error) {
 }
 
 var (
-	frontStart    = []byte("{{/*\n")
-	frontEnd      = []byte("\n*/}}\n")
-	compressTypes = map[string]bool{
-		"application/javascript": true,
-		"text/css":               true,
-		"text/html":              true,
-	}
+	frontStart = []byte("{{/*\n")
+	frontEnd   = []byte("\n*/}}\n")
 )
 
 // Resource returns the entity for the given path.
@@ -141,11 +123,13 @@ func (s *Site) Resource(path string) ([]byte, http.Header, error) {
 		var tmpl interface {
 			ExecuteTemplate(wr io.Writer, name string, data interface{}) error
 		}
+
 		if typeSubtype(mt) == "text/html" {
 			tmpl, err = htemp.New("").Funcs(ctx.funcMap(path, s)).ParseFiles(files...)
 		} else {
 			tmpl, err = ttemp.New("").Funcs(ctx.funcMap(path, s)).ParseFiles(files...)
 		}
+
 		if err != nil {
 			return nil, nil, err
 		}
@@ -160,20 +144,9 @@ func (s *Site) Resource(path string) ([]byte, http.Header, error) {
 
 	// HTTP headers.
 
-	encoding := "identity"
-	if s.compress && compressTypes[typeSubtype(mt)] {
-		var buf bytes.Buffer
-		gzw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-		gzw.Write(body)
-		gzw.Close()
-		body = buf.Bytes()
-		encoding = "gzip"
-	}
-
 	header := http.Header{
-		"Content-Type":     {mt},
-		"Content-Encoding": {encoding},
-		"Content-Length":   {strconv.Itoa(len(body))},
+		"Content-Type":   {mt},
+		"Content-Length": {strconv.Itoa(len(body))},
 	}
 
 	if front.Redirect != "" {
@@ -181,13 +154,6 @@ func (s *Site) Resource(path string) ([]byte, http.Header, error) {
 	}
 
 	return body, header, nil
-}
-
-func typeSubtype(mt string) string {
-	if i := strings.IndexByte(mt, ';'); i >= 0 {
-		mt = strings.TrimSpace(mt[:i])
-	}
-	return mt
 }
 
 // resource returns the parsed front matter (if any) and the file's contents.
@@ -211,4 +177,10 @@ func (s *Site) readResource(fpath string) (*front, []byte, error) {
 		}
 	}
 	return front, data, err
+}
+func typeSubtype(mt string) string {
+	if i := strings.IndexByte(mt, ';'); i >= 0 {
+		mt = strings.TrimSpace(mt[:i])
+	}
+	return mt
 }

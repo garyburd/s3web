@@ -33,7 +33,7 @@ func handler(resp http.ResponseWriter, req *http.Request) {
 	}
 	status := http.StatusOK
 
-	s, err := site.New(dir, site.WithCompression(true))
+	s, err := site.New(dir)
 	if err != nil {
 		http.Error(resp, err.Error(), http.StatusInternalServerError)
 		return

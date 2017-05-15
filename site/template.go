@@ -16,7 +16,6 @@ package site
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	htemp "html/template"
 	"image"
@@ -24,7 +23,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	_ "image/gif"
@@ -39,7 +37,6 @@ type templateContext struct {
 
 func (ctx *templateContext) funcMap(path string, s *Site) map[string]interface{} {
 	return map[string]interface{}{
-		"code":    ctx.code,
 		"data":    ctx.data,
 		"image":   ctx.image,
 		"include": ctx.include,
@@ -107,77 +104,4 @@ func (ctx *templateContext) image(path string, attrs ...string) (htemp.HTML, err
 	}
 	buf.WriteByte('>')
 	return htemp.HTML(buf.String()), nil
-}
-
-var (
-	nl         = []byte{'\n'}
-	tab        = []byte{'\t'}
-	fourSpaces = []byte{' ', ' ', ' ', ' '}
-	omitNl     = []byte("OMIT\n")
-)
-
-func (ctx *templateContext) code(path string, patterns ...string) (string, error) {
-	p, err := ioutil.ReadFile(ctx.filePath(path))
-	if err == nil {
-		switch len(patterns) {
-		case 0:
-			// nothing to do
-		case 1:
-			p, err = oneLine(p, patterns[0])
-		case 2:
-			p, err = multipleLines(p, patterns[0], patterns[1])
-		default:
-			err = errors.New("> 2 arguments")
-		}
-	}
-	if err != nil {
-		return "", fmt.Errorf("Code %q %v, %v", path, patterns, err)
-	}
-	p = bytes.TrimSuffix(p, nl)
-	p = bytes.Replace(p, tab, fourSpaces, -1)
-	return string(p), nil
-}
-
-func oneLine(p []byte, pattern string) ([]byte, error) {
-	lines := bytes.SplitAfter(p, nl)
-	i, err := match(lines, pattern)
-	if err != nil {
-		return nil, err
-	}
-	return lines[i], nil
-}
-
-func multipleLines(p []byte, pattern1, pattern2 string) ([]byte, error) {
-	lines := bytes.SplitAfter(p, nl)
-	line1, err := match(lines, pattern1)
-	if err != nil {
-		return nil, err
-	}
-	line2, err := match(lines[line1:], pattern2)
-	if err != nil {
-		return nil, err
-	}
-	line2 += line1
-	for i := line1; i <= line2; i++ {
-		if bytes.HasSuffix(lines[i], omitNl) {
-			lines[i] = []byte{}
-		}
-	}
-	return bytes.Join(lines[line1:line2+1], []byte{}), nil
-}
-
-func match(lines [][]byte, pattern string) (int, error) {
-	if len(pattern) < 2 || pattern[0] != '/' || pattern[len(pattern)-1] != '/' {
-		return 0, fmt.Errorf("invalid pattern %q", pattern)
-	}
-	re, err := regexp.Compile(pattern[1 : len(pattern)-1])
-	if err != nil {
-		return 0, err
-	}
-	for i, line := range lines {
-		if re.Match(line) {
-			return i, nil
-		}
-	}
-	return 0, fmt.Errorf("pattern %q not found", pattern)
 }
