@@ -25,9 +25,11 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/garyburd/s3web/site"
@@ -59,6 +61,13 @@ type object struct {
 	LastModified time.Time
 }
 
+// putRequest represents the data of an object to put.
+type putRequest struct {
+	path   string
+	header http.Header
+	body   []byte
+}
+
 func Run() {
 	if len(FlagSet.Args()) != 1 {
 		FlagSet.Usage()
@@ -84,21 +93,26 @@ func Run() {
 		log.Fatal(err)
 	}
 
+	var (
+		wg sync.WaitGroup
+		ch = make(chan putRequest, 1)
+	)
+	wg.Add(1)
+	go func() {
+		for pr := range ch {
+			if err := put(keys, config.Bucket+pr.path, pr.header, pr.body); err != nil {
+				log.Fatal(err)
+			}
+		}
+		wg.Done()
+	}()
+
 	s, err := site.New(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	paths, err := s.Paths()
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	for _, path := range paths {
-		body, header, err := s.Resource(path)
-		if err != nil {
-			log.Fatal(err)
-		}
-
+	err = s.Walk(func(path string, header http.Header, body []byte) error {
 		if compressTypes[typeSubtype(header.Get("Content-Type"))] {
 			var buf bytes.Buffer
 			gzw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
@@ -112,12 +126,12 @@ func Run() {
 			delete(objects, o.Key)
 			if !*force && o.ETag == fmt.Sprintf(`"%x"`, md5.Sum(body)) {
 				log.Printf("OK     %s", path)
-				continue
+				return nil
 			}
 		}
 		log.Printf("UPLOAD %s", path)
 		if *dryRun {
-			continue
+			return nil
 		}
 		if l := header.Get("Location"); l != "" {
 			header.Del("Location")
@@ -125,10 +139,12 @@ func Run() {
 		}
 		header.Set("X-Amz-Acl", "public-read")
 		header.Set("Cache-Control", fmt.Sprintf("max-age=%d", config.MaxAge))
-		if err := put(keys, config.Bucket+path, body, header); err != nil {
-			log.Fatal(err)
-		}
-	}
+		ch <- putRequest{path, header, body}
+		return nil
+	})
+
+	close(ch)
+	wg.Wait()
 
 	for _, o := range objects {
 		log.Printf("DELETE /%s", o.Key)
@@ -156,7 +172,7 @@ func get(keys s3.Keys, path string) (io.ReadCloser, error) {
 	return resp.Body, nil
 }
 
-func put(keys s3.Keys, path string, body []byte, header http.Header) error {
+func put(keys s3.Keys, path string, header http.Header, body []byte) error {
 	req, _ := http.NewRequest("PUT", path, bytes.NewReader(body))
 	req.ContentLength = int64(len(body))
 	req.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
@@ -191,24 +207,29 @@ func del(keys s3.Keys, path string) error {
 }
 
 func fetchObjects(keys s3.Keys, bucket string) (map[string]*object, error) {
-	rc, err := get(keys, bucket)
-	if err != nil {
-		return nil, err
-	}
-	defer rc.Close()
-	var contents struct {
-		IsTruncated bool
-		Contents    []*object
-	}
-	if err := xml.NewDecoder(rc).Decode(&contents); err != nil {
-		return nil, fmt.Errorf("error reading bucket, %v", err)
-	}
-	if contents.IsTruncated {
-		return nil, fmt.Errorf("bucket contents truncated")
-	}
-	objects := make(map[string]*object, len(contents.Contents))
-	for _, o := range contents.Contents {
-		objects[o.Key] = o
+	objects := make(map[string]*object)
+	h := url.Values{"list-type": {"2"}}
+	for {
+		rc, err := get(keys, bucket+"?"+h.Encode())
+		if err != nil {
+			return nil, err
+		}
+		var data struct {
+			NextContinuationToken string
+			Contents              []*object
+		}
+		err = xml.NewDecoder(rc).Decode(&data)
+		rc.Close()
+		if err != nil {
+			return nil, fmt.Errorf("error reading bucket, %v", err)
+		}
+		for _, o := range data.Contents {
+			objects[o.Key] = o
+		}
+		if data.NextContinuationToken == "" {
+			break
+		}
+		h.Set("continuation-token", data.NextContinuationToken)
 	}
 	return objects, nil
 }

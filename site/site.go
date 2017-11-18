@@ -65,9 +65,8 @@ func New(dir string) (*Site, error) {
 	return s, nil
 }
 
-func (s *Site) Paths() ([]string, error) {
-	var paths []string
-	err := filepath.Walk(s.dir, func(fname string, info os.FileInfo, err error) error {
+func (s *Site) Walk(fn func(path string, header http.Header, body []byte) error) error {
+	return filepath.Walk(s.dir, func(fname string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -81,10 +80,12 @@ func (s *Site) Paths() ([]string, error) {
 			return nil
 		}
 		path := filepath.ToSlash(fname[len(s.dir):])
-		paths = append(paths, path)
-		return nil
+		body, header, err := s.Resource(path)
+		if err != nil {
+			return fmt.Errorf("error reading %s: %v", path, err)
+		}
+		return fn(path, header, body)
 	})
-	return paths, err
 }
 
 var (

@@ -17,6 +17,7 @@ package site_test
 import (
 	"bytes"
 	"io/ioutil"
+	"net/http"
 	"path/filepath"
 	"testing"
 
@@ -28,24 +29,17 @@ func TestSite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths, err := s.Paths()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range paths {
+	s.Walk(func(path string, header http.Header, body []byte) error {
 		fpath := filepath.Join("testdata/output", filepath.FromSlash(path))
 		expected, err := ioutil.ReadFile(fpath)
 		if err != nil {
 			t.Errorf("ioutil.ReadFile(%q) returned error: %v", fpath, err)
-			continue
-		}
-		body, _, err := s.Resource(path)
-		if err != nil {
-			t.Errorf("s.Resource(%q) returned error: %v", path, err)
+			return nil
 		}
 		if !bytes.Equal(expected, body) {
 			t.Errorf("%s\n\t got: %q\n\twant: %q", path, body, expected)
-			continue
+			return nil
 		}
-	}
+		return nil
+	})
 }

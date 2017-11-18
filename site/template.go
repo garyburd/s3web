@@ -37,9 +37,17 @@ type templateContext struct {
 
 func (ctx *templateContext) funcMap(path string, s *Site) map[string]interface{} {
 	return map[string]interface{}{
-		"data":    ctx.data,
-		"image":   ctx.image,
-		"include": ctx.include,
+		"args":            func(v ...interface{}) []interface{} { return v },
+		"data":            ctx.data,
+		"image":           ctx.image,
+		"imageSrcset":     ctx.imageSrcset,
+		"imageSrcWH":      ctx.imageSrcWH,
+		"include":         ctx.include,
+		"includeCSS":      ctx.includeCSS,
+		"includeHTML":     ctx.includeHTML,
+		"includeHTMLAttr": ctx.includeHTMLAttr,
+		"includeJS":       ctx.includeJS,
+		"includeJSStr":    ctx.includeJSStr,
 	}
 }
 
@@ -50,7 +58,8 @@ func (ctx *templateContext) filePath(p string) string {
 	if !strings.HasPrefix(p, "/") {
 		p = path.Join(path.Dir(ctx.path), p)
 	}
-	return filepath.Join(ctx.s.dir, filepath.FromSlash(p))
+	p = filepath.Join(ctx.s.dir, filepath.FromSlash(p))
+	return p
 }
 
 func (ctx *templateContext) data(p string) (interface{}, error) {
@@ -69,8 +78,32 @@ func (ctx *templateContext) include(path string) (string, error) {
 	return string(p), err
 }
 
-func (ctx *templateContext) imageConfig(path string) (image.Config, error) {
-	fpath := ctx.filePath(path)
+func (ctx *templateContext) includeCSS(path string) (htemp.CSS, error) {
+	s, err := ctx.include(path)
+	return htemp.CSS(s), err
+}
+
+func (ctx *templateContext) includeHTML(path string) (htemp.HTML, error) {
+	s, err := ctx.include(path)
+	return htemp.HTML(s), err
+}
+
+func (ctx *templateContext) includeHTMLAttr(path string) (htemp.HTMLAttr, error) {
+	s, err := ctx.include(path)
+	return htemp.HTMLAttr(s), err
+}
+
+func (ctx *templateContext) includeJS(path string) (htemp.JS, error) {
+	s, err := ctx.include(path)
+	return htemp.JS(s), err
+}
+
+func (ctx *templateContext) includeJSStr(path string) (htemp.JSStr, error) {
+	s, err := ctx.include(path)
+	return htemp.JSStr(s), err
+}
+
+func (ctx *templateContext) imageConfig(fpath string) (image.Config, error) {
 	if ctx.s.images == nil {
 		ctx.s.images = make(map[string]image.Config)
 	}
@@ -90,8 +123,40 @@ func (ctx *templateContext) imageConfig(path string) (image.Config, error) {
 	return config, nil
 }
 
+func (ctx *templateContext) imageSrcset(p string) (htemp.HTMLAttr, error) {
+	dir := path.Dir(p)
+	fp := ctx.filePath(p)
+
+	fpaths, err := filepath.Glob(fp)
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, `srcset="`)
+	for i, fpath := range fpaths {
+		c, err := ctx.imageConfig(fpath)
+		if err != nil {
+			return "", err
+		}
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		fmt.Fprintf(&buf, "%s %dw", path.Join(dir, filepath.Base(fpath)), c.Width)
+	}
+	buf.WriteString(`"`)
+	return htemp.HTMLAttr(buf.String()), nil
+}
+
+func (ctx *templateContext) imageSrcWH(path string) (htemp.HTMLAttr, error) {
+	c, err := ctx.imageConfig(ctx.filePath(path))
+	if err != nil {
+		return "", err
+	}
+	return htemp.HTMLAttr(fmt.Sprintf(`src="%s" width="%d" height="%d"`, path, c.Width, c.Height)), nil
+}
+
 func (ctx *templateContext) image(path string, attrs ...string) (htemp.HTML, error) {
-	c, err := ctx.imageConfig(path)
+	c, err := ctx.imageConfig(ctx.filePath(path))
 	if err != nil {
 		return "", err
 	}
