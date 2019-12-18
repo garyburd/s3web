@@ -12,34 +12,28 @@
 // License for the specific language governing permissions and limitations
 // under the License.
 
-package site_test
+package check
 
 import (
-	"bytes"
-	"io/ioutil"
-	"net/http"
-	"path/filepath"
-	"testing"
+	"flag"
+	"log"
 
-	"github.com/garyburd/s3web/site"
+	"github.com/garyburd/staticsite/site"
 )
 
-func TestSite(t *testing.T) {
-	s, err := site.New("testdata/site")
-	if err != nil {
-		t.Fatal(err)
+var (
+	flagSet = flag.NewFlagSet("check", flag.ExitOnError)
+	Command = &site.Command{
+		Name:    "check",
+		Usage:   "check [directory]",
+		FlagSet: flagSet,
+		Run:     run,
 	}
-	s.Walk(func(path string, header http.Header, body []byte) error {
-		fpath := filepath.Join("testdata/output", filepath.FromSlash(path))
-		expected, err := ioutil.ReadFile(fpath)
-		if err != nil {
-			t.Errorf("ioutil.ReadFile(%q) returned error: %v", fpath, err)
-			return nil
-		}
-		if !bytes.Equal(expected, body) {
-			t.Errorf("%s\n\t got: %q\n\twant: %q", path, body, expected)
-			return nil
-		}
-		return nil
-	})
+)
+
+func run() {
+	err := site.Walk(flagSet.Arg(0), func(r *site.Resource) error { return nil })
+	if err != nil {
+		log.Fatal(err)
+	}
 }

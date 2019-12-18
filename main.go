@@ -1,3 +1,17 @@
+// Copyright 2011 Gary Burd
+//
+// Licensed under the Apache License, Version 2.0 (the "License"): you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+// WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+// License for the specific language governing permissions and limitations
+// under the License.
+
 package main
 
 import (
@@ -5,21 +19,18 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sort"
 	"strings"
 
-	"github.com/garyburd/s3web/deploy"
-	"github.com/garyburd/s3web/serve"
+	"github.com/garyburd/staticsite/check"
+	"github.com/garyburd/staticsite/s3"
+	"github.com/garyburd/staticsite/serve"
+	"github.com/garyburd/staticsite/site"
 )
 
-var commands = []struct {
-	name  string
-	fs    *flag.FlagSet
-	usage string
-	run   func()
-}{
-	{"serve", serve.FlagSet, serve.Usage, serve.Run},
-	{"deploy", deploy.FlagSet, deploy.Usage, deploy.Run},
+var commands = []*site.Command{
+	serve.Command,
+	s3.Command,
+	check.Command,
 }
 
 func main() {
@@ -33,14 +44,14 @@ func main() {
 		return
 	}
 	for _, c := range commands {
-		if args[0] == c.name {
-			c.fs.Usage = func() {
-				log.Println(c.usage)
-				c.fs.PrintDefaults()
+		if args[0] == c.Name {
+			c.FlagSet.Usage = func() {
+				log.Println(c.Usage)
+				c.FlagSet.PrintDefaults()
 				os.Exit(2)
 			}
-			c.fs.Parse(args[1:])
-			c.run()
+			c.FlagSet.Parse(args[1:])
+			c.Run()
 			return
 		}
 	}
@@ -50,9 +61,8 @@ func main() {
 func printUsage() {
 	var names []string
 	for _, c := range commands {
-		names = append(names, c.name)
+		names = append(names, c.Name)
 	}
-	sort.Strings(names)
-	fmt.Fprintf(os.Stderr, "%s %s\n", os.Args[0], strings.Join(names, "|"))
+	fmt.Fprintf(os.Stderr, "%s %s\n", os.Args[0], strings.Join(names, " | "))
 	flag.PrintDefaults()
 }

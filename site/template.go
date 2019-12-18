@@ -1,4 +1,4 @@
-// Copyright 2011 Gary Burd
+// Copyright 2019 Gary Burd
 //
 // Licensed under the Apache License, Version 2.0 (the "License"): you may
 // not use this file except in compliance with the License. You may obtain
@@ -16,100 +16,302 @@ package site
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
-	htemp "html/template"
+	htemplate "html/template"
 	"image"
 	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	ttemplate "text/template"
+	tparse "text/template/parse"
+	"time"
 
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 )
 
-type templateContext struct {
-	s    *Site
-	path string
+// template represents a parsed template.
+//
+// The clone field is set when the template is parsed and is never executed so
+// that it can be later cloned (an html/template template cannot be cloned
+// after the template is executed). The exec field is set on first execution of
+// the template.
+//
+// modTime is the maximum file modification time of this template and any
+// templates that this template depends on.
+type template struct {
+	clone   *htemplate.Template
+	exec    *htemplate.Template
+	modTime time.Time
 }
 
-func (ctx *templateContext) funcMap(path string, s *Site) map[string]interface{} {
-	return map[string]interface{}{
-		"args":            func(v ...interface{}) []interface{} { return v },
-		"data":            ctx.data,
-		"image":           ctx.image,
-		"imageSrcset":     ctx.imageSrcset,
-		"imageSrcWH":      ctx.imageSrcWH,
-		"include":         ctx.include,
-		"includeCSS":      ctx.includeCSS,
-		"includeHTML":     ctx.includeHTML,
-		"includeHTMLAttr": ctx.includeHTMLAttr,
-		"includeJS":       ctx.includeJS,
-		"includeJSStr":    ctx.includeJSStr,
+func (t *template) parse(fpath string, modTime time.Time, data []byte) (*template, error) {
+	t0 := htemplate.Must(t.clone.Clone())
+	t1, err := t0.New(fpath).Parse(string(data))
+	if err != nil {
+		s := err.Error()
+		if ts := strings.TrimPrefix(s, "template: "); ts != s {
+			err = errors.New(ts)
+		}
+		return nil, err
+	}
+
+	result := &template{modTime: maxTime(modTime, t.modTime), clone: t0}
+
+	// Return the new template if it's not empty.
+	if t1.Tree != nil && t1.Tree.Root != nil {
+		for _, n := range t1.Tree.Root.Nodes {
+			tn, ok := n.(*tparse.TextNode)
+			if !ok || len(bytes.TrimSpace(tn.Text)) > 0 {
+				result.clone = t1
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
+func (t *template) execute(s *site, p *Page) ([]byte, time.Time, error) {
+	if t.exec == nil {
+		t.exec = htemplate.Must(t.clone.Clone())
+	}
+
+	udir := path.Dir(p.Path)
+	fdir := s.toFilePath(udir)
+
+	fc := functionContext{
+		site: s,
+		udir: udir,
+		fdir: fdir,
+	}
+	t.exec.Funcs(fc.funcs())
+
+	var buf bytes.Buffer
+
+	err := t.exec.Execute(&buf, p)
+	if ee, ok := err.(ttemplate.ExecError); ok {
+		s := ee.Err.Error()
+		if ts := strings.TrimPrefix(s, "template: "); ts != s {
+			err = errors.New(ts)
+		}
+	}
+	return buf.Bytes(), fc.modTime, err
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+var baseTemplate = &template{
+	clone: htemplate.Must(htemplate.New("_").Funcs((&functionContext{}).funcs()).Parse("")),
+}
+
+type slice []interface{}
+
+// functionContext is the context for template functions.
+type functionContext struct {
+	// The site.
+	site *site
+
+	// modTime is maxiumum modification time of any referenced file.
+	modTime time.Time
+
+	// Current page URL directory.
+	udir string
+
+	// Current page file directory.
+	fdir string
+}
+
+func (fc *functionContext) funcs() htemplate.FuncMap {
+	return htemplate.FuncMap{
+		"slice":           func(v ...interface{}) []interface{} { return slice(v) },
+		"pathBase":        path.Base,
+		"pathDir":         path.Dir,
+		"pathJoin":        path.Join,
+		"glob":            fc.glob,
+		"include":         fc.include,
+		"includeCSS":      fc.includeCSS,
+		"includeHTML":     fc.includeHTML,
+		"includeHTMLAttr": fc.includeHTMLAttr,
+		"includeJS":       fc.includeJS,
+		"includeJSStr":    fc.includeJSStr,
+		"readJSON":        fc.readJSON,
+		"readPage":        fc.readPage,
+		"readImage":       fc.readImage,
+		"readImageSrcSet": fc.readImageSrcSet,
 	}
 }
 
-func (ctx *templateContext) filePath(p string) string {
-	if strings.HasSuffix(p, "/") {
-		p += "index.html"
+func (fc *functionContext) updateModTime(fpath string) error {
+	fi, err := os.Stat(fpath)
+	if err != nil {
+		return err
 	}
-	if !strings.HasPrefix(p, "/") {
-		p = path.Join(path.Dir(ctx.path), p)
-	}
-	p = filepath.Join(ctx.s.dir, filepath.FromSlash(p))
-	return p
+	fc.modTime = maxTime(fc.modTime, fi.ModTime())
+	return nil
 }
 
-func (ctx *templateContext) data(p string) (interface{}, error) {
-	front, _, err := ctx.s.readResource(ctx.filePath(p))
+func (fc *functionContext) toFilePath(upath string) string {
+	if !strings.HasPrefix(upath, "/") {
+		upath = path.Join(fc.udir, upath)
+	}
+	return fc.site.toFilePath(upath)
+}
+
+func (fc *functionContext) toURLPath(abs bool, fpath string) (string, error) {
+	if abs {
+		p, err := filepath.Rel(fc.site.dir, fpath)
+		if err != nil {
+			return "", err
+		}
+		return "/" + filepath.ToSlash(p), nil
+	}
+
+	p, err := filepath.Rel(fc.fdir, fpath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(p), nil
+}
+
+func (fc *functionContext) visitGlob(uglob string, visit func(fpath string, upath string) error) error {
+	fglob := fc.toFilePath(uglob)
+	fpaths, err := filepath.Glob(fglob)
+	if err != nil {
+		return err
+	}
+	abs := strings.HasPrefix(uglob, "/")
+	for _, fpath := range fpaths {
+		upath, err := fc.toURLPath(abs, fpath)
+		if err != nil {
+			return err
+		}
+		if err := visit(fpath, upath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (fc *functionContext) glob(uglob string) ([]string, error) {
+	var result []string
+	err := fc.visitGlob(uglob, func(fpath, upath string) error {
+		result = append(result, upath)
+		return nil
+	})
+	return result, err
+}
+
+func (fc *functionContext) include(upath string) (string, error) {
+	fpath := fc.toFilePath(upath)
+	fc.updateModTime(fpath)
+	b, err := ioutil.ReadFile(fpath)
+	return string(b), err
+}
+
+func (fc *functionContext) includeCSS(upath string) (htemplate.CSS, error) {
+	s, err := fc.include(upath)
+	return htemplate.CSS(s), err
+}
+
+func (fc *functionContext) includeHTML(upath string) (htemplate.HTML, error) {
+	s, err := fc.include(upath)
+	return htemplate.HTML(s), err
+}
+
+func (fc *functionContext) includeHTMLAttr(upath string) (htemplate.HTMLAttr, error) {
+	s, err := fc.include(upath)
+	return htemplate.HTMLAttr(s), err
+}
+
+func (fc *functionContext) includeJS(upath string) (htemplate.JS, error) {
+	s, err := fc.include(upath)
+	return htemplate.JS(s), err
+}
+
+func (fc *functionContext) includeJSStr(upath string) (htemplate.JSStr, error) {
+	s, err := fc.include(upath)
+	return htemplate.JSStr(s), err
+}
+
+func (fc *functionContext) readJSON(upath string) (interface{}, error) {
+	fpath := fc.toFilePath(upath)
+	fc.updateModTime(fpath)
+	f, err := os.Open(fpath)
 	if err != nil {
 		return nil, err
 	}
-	if front.Data == nil {
-		return nil, fmt.Errorf("front data for %s not set", p)
+	defer f.Close()
+	var v interface{}
+	err = json.NewDecoder(f).Decode(&v)
+	return v, err
+}
+
+func (fc *functionContext) readPage(upath string) (*Page, error) {
+	if strings.HasSuffix(upath, "/") {
+		upath += "index.html"
 	}
-	return front.Data, nil
+	fpath := fc.toFilePath(upath)
+	fc.updateModTime(fpath)
+	p := &Page{Path: upath}
+	_, _, err := readFileWithFrontMatter(fpath, p)
+	return p, err
 }
 
-func (ctx *templateContext) include(path string) (string, error) {
-	p, err := ioutil.ReadFile(ctx.filePath(path))
-	return string(p), err
+type Image struct {
+	W   int
+	H   int
+	Src string
 }
 
-func (ctx *templateContext) includeCSS(path string) (htemp.CSS, error) {
-	s, err := ctx.include(path)
-	return htemp.CSS(s), err
+func (img *Image) SrcWidthHeight() htemplate.HTMLAttr {
+	return htemplate.HTMLAttr(fmt.Sprintf(`src="%s" width="%d" height="%d"`, img.Src, img.W, img.H))
 }
 
-func (ctx *templateContext) includeHTML(path string) (htemp.HTML, error) {
-	s, err := ctx.include(path)
-	return htemp.HTML(s), err
+func (fc *functionContext) readImage(upath string) (*Image, error) {
+	config, err := readImageConfig(fc.toFilePath(upath))
+	return &Image{Src: upath, W: config.Width, H: config.Height}, err
 }
 
-func (ctx *templateContext) includeHTMLAttr(path string) (htemp.HTMLAttr, error) {
-	s, err := ctx.include(path)
-	return htemp.HTMLAttr(s), err
+type ImageSrcSet struct {
+	Image
+	SrcSet string
 }
 
-func (ctx *templateContext) includeJS(path string) (htemp.JS, error) {
-	s, err := ctx.include(path)
-	return htemp.JS(s), err
-}
-
-func (ctx *templateContext) includeJSStr(path string) (htemp.JSStr, error) {
-	s, err := ctx.include(path)
-	return htemp.JSStr(s), err
-}
-
-func (ctx *templateContext) imageConfig(fpath string) (image.Config, error) {
-	if ctx.s.images == nil {
-		ctx.s.images = make(map[string]image.Config)
+func (fc *functionContext) readImageSrcSet(src string, srcset string) (*ImageSrcSet, error) {
+	fsrc := fc.toFilePath(src)
+	config, err := readImageConfig(fsrc)
+	if err != nil {
+		return nil, err
 	}
-	if c, ok := ctx.s.images[fpath]; ok {
-		return c, nil
-	}
+	result := &ImageSrcSet{Image: Image{Src: src, W: config.Width, H: config.Height}}
+	var buf strings.Builder
+	fmt.Fprintf(&buf, "%s %dw", src, config.Width)
+	fc.visitGlob(srcset, func(fpath, upath string) error {
+		if fpath == fsrc {
+			return nil
+		}
+		config, err := readImageConfig(fpath)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&buf, ", %s %dw", upath, config.Width)
+		return nil
+	})
+	result.SrcSet = buf.String()
+	return result, err
+}
+
+func readImageConfig(fpath string) (image.Config, error) {
 	f, err := os.Open(fpath)
 	if err != nil {
 		return image.Config{}, err
@@ -117,56 +319,7 @@ func (ctx *templateContext) imageConfig(fpath string) (image.Config, error) {
 	defer f.Close()
 	config, _, err := image.DecodeConfig(f)
 	if err != nil {
-		return image.Config{}, fmt.Errorf("error reading %s: %v", fpath, err)
+		err = fmt.Errorf("error reading %s: %w", fpath, err)
 	}
-	ctx.s.images[fpath] = config
-	return config, nil
-}
-
-func (ctx *templateContext) imageSrcset(p string) (htemp.HTMLAttr, error) {
-	dir := path.Dir(p)
-	fp := ctx.filePath(p)
-
-	fpaths, err := filepath.Glob(fp)
-	if err != nil {
-		return "", err
-	}
-	var buf bytes.Buffer
-	fmt.Fprintf(&buf, `srcset="`)
-	for i, fpath := range fpaths {
-		c, err := ctx.imageConfig(fpath)
-		if err != nil {
-			return "", err
-		}
-		if i > 0 {
-			buf.WriteString(", ")
-		}
-		fmt.Fprintf(&buf, "%s %dw", path.Join(dir, filepath.Base(fpath)), c.Width)
-	}
-	buf.WriteString(`"`)
-	return htemp.HTMLAttr(buf.String()), nil
-}
-
-func (ctx *templateContext) imageSrcWH(path string) (htemp.HTMLAttr, error) {
-	c, err := ctx.imageConfig(ctx.filePath(path))
-	if err != nil {
-		return "", err
-	}
-	return htemp.HTMLAttr(fmt.Sprintf(`src="%s" width="%d" height="%d"`, path, c.Width, c.Height)), nil
-}
-
-func (ctx *templateContext) image(path string, attrs ...string) (htemp.HTML, error) {
-	c, err := ctx.imageConfig(ctx.filePath(path))
-	if err != nil {
-		return "", err
-	}
-
-	var buf bytes.Buffer
-	fmt.Fprintf(&buf, `<img src="%s" width="%d" height="%d"`, path, c.Width, c.Height)
-	for _, attr := range attrs {
-		buf.WriteByte(' ')
-		buf.WriteString(attr)
-	}
-	buf.WriteByte('>')
-	return htemp.HTML(buf.String()), nil
+	return config, err
 }

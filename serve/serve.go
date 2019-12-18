@@ -20,10 +20,37 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/garyburd/s3web/site"
+	"github.com/garyburd/staticsite/site"
 )
 
-func handler(resp http.ResponseWriter, req *http.Request) {
+var (
+	flagSet  = flag.NewFlagSet("serve", flag.ExitOnError)
+	httpAddr = flagSet.String("addr", "127.0.0.1:8080", "serve site at `address`")
+	Command  = &site.Command{
+		Name:    "serve",
+		Usage:   "serve [directoy]",
+		FlagSet: flagSet,
+		Run:     run,
+	}
+)
+
+func run() {
+	h := make(handler)
+	err := site.Walk(flagSet.Arg(0), func(r *site.Resource) error {
+		h[r.Path] = r
+		return nil
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Serving %d resources at %s.", len(h), *httpAddr)
+	s := http.Server{Addr: *httpAddr, Handler: h}
+	log.Fatal(s.ListenAndServe())
+}
+
+type handler map[string]*site.Resource
+
+func (h handler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 	path := req.URL.Path
 	switch {
 	case path == "":
@@ -31,50 +58,20 @@ func handler(resp http.ResponseWriter, req *http.Request) {
 	case strings.HasSuffix(path, "/"):
 		path += "index.html"
 	}
-	status := http.StatusOK
-
-	s, err := site.New(dir)
+	r := h[path]
+	if r == nil {
+		http.Error(resp, "Not Found", http.StatusNotFound)
+		return
+	}
+	f, ct, err := r.Open()
 	if err != nil {
 		http.Error(resp, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	body, header, err := s.Resource(path)
-	if _, ok := err.(site.NotFoundError); ok {
-		status = http.StatusNotFound
-		if b, h, erre := s.Resource(site.ErrorPage); erre == nil {
-			body = b
-			header = h
-		} else {
-			body = []byte(err.Error())
-			header = http.Header{"Content-Type": {"text/plain"}}
-		}
-	} else if err != nil {
-		status = http.StatusInternalServerError
-		body = []byte(err.Error())
-		header = http.Header{"Content-Type": {"text/plain"}}
-	} else if header.Get("Location") != "" {
-		status = 302
-	}
-	for k, v := range header {
-		resp.Header()[k] = v
-	}
+
+	defer f.Close()
+
 	resp.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	resp.WriteHeader(status)
-	resp.Write(body)
-}
-
-var (
-	FlagSet  = flag.NewFlagSet("serve", flag.ExitOnError)
-	Usage    = "serve dir"
-	httpAddr = FlagSet.String("addr", ":8080", "serve locally at this address")
-	dir      string
-)
-
-func Run() {
-	if len(FlagSet.Args()) != 1 {
-		FlagSet.Usage()
-	}
-	dir = FlagSet.Arg(0)
-	s := http.Server{Addr: *httpAddr, Handler: http.HandlerFunc(handler)}
-	log.Fatal(s.ListenAndServe())
+	resp.Header().Set("Content-Type", ct)
+	http.ServeContent(resp, req, r.Path, r.ModTime, f)
 }
