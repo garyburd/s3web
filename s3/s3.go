@@ -33,9 +33,10 @@ import (
 )
 
 var (
-	flagSet = flag.NewFlagSet("s3", flag.ExitOnError)
-	dryRun  = flagSet.Bool("n", false, "Dry run")
-	force   = flagSet.Bool("f", false, "Force upload of all files")
+	flagSet    = flag.NewFlagSet("s3", flag.ExitOnError)
+	dryRun     = flagSet.Bool("n", false, "Dry run")
+	force      = flagSet.Bool("f", false, "Force upload of all files")
+	invalidate = flagSet.Bool("i", true, "Invalidate cloudfront distribution")
 
 	Command = &site.Command{
 		Name:    "s3",
@@ -90,6 +91,7 @@ func run() {
 		log.Fatal(err)
 	}
 
+	var resourceModified bool
 	for _, r := range resources {
 		log.Printf("%s %s\n", r.UpdateReason, r.Path)
 		if *dryRun {
@@ -98,6 +100,9 @@ func run() {
 		var err error
 		if r.FilePath != "" || r.Data != nil {
 			err = u.uploadResource(r)
+			if r.UpdateReason != updateNew {
+				resourceModified = true
+			}
 		} else {
 			err = u.deleteResource(r)
 		}
@@ -106,13 +111,15 @@ func run() {
 		}
 	}
 
-	if !*dryRun && len(resources) > 0 && u.config.CloudFrontDistributionID != "" {
+	if !*dryRun && *invalidate && resourceModified && u.config.CloudFrontDistributionID != "" {
 		log.Printf("Invalidating CloudFront distribution")
 		err := u.invalidateDistribution()
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
+
+	log.Printf("View the updated website at http://%s.s3-website-%s.amazonaws.com/", u.config.Bucket, u.config.Region)
 }
 
 func (u *updater) readConfig() error {
@@ -170,6 +177,14 @@ func (u *updater) readObjects() (map[string]*s3.Object, error) {
 	return objects, nil
 }
 
+const (
+	updateNew        = "N"
+	updateHashChange = "H"
+	updateForce      = "F"
+	updateTimeChange = "T"
+	updateSizeChange = "S"
+)
+
 func (u *updater) getResourcesToUpdate() ([]*site.Resource, error) {
 	objects, err := u.readObjects()
 	if err != nil {
@@ -181,26 +196,26 @@ func (u *updater) getResourcesToUpdate() ([]*site.Resource, error) {
 		key := r.Path[1:]
 		o, ok := objects[key]
 		if !ok {
-			r.UpdateReason = "N"
+			r.UpdateReason = updateNew
 		} else {
 			delete(objects, key)
 			if r.Data != nil {
 				switch {
 				case aws.StringValue(o.ETag) != fmt.Sprintf(`"%x"`, md5.Sum(r.Data)):
-					r.UpdateReason = "H"
+					r.UpdateReason = updateHashChange
 				case *force:
-					r.UpdateReason = "F"
+					r.UpdateReason = updateForce
 				default:
 					return nil
 				}
 			} else {
 				switch {
 				case r.Size != aws.Int64Value(o.Size):
-					r.UpdateReason = "S"
+					r.UpdateReason = updateSizeChange
 				case r.ModTime.After(aws.TimeValue(o.LastModified)):
-					r.UpdateReason = "T"
+					r.UpdateReason = updateTimeChange
 				case *force:
-					r.UpdateReason = "F"
+					r.UpdateReason = updateForce
 				default:
 					return nil
 				}

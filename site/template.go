@@ -133,10 +133,16 @@ type functionContext struct {
 
 func (fc *functionContext) funcs() htemplate.FuncMap {
 	return htemplate.FuncMap{
-		"slice":           func(v ...interface{}) []interface{} { return slice(v) },
-		"pathBase":        path.Base,
-		"pathDir":         path.Dir,
-		"pathJoin":        path.Join,
+		"slice": func(v ...interface{}) []interface{} { return slice(v) },
+
+		"pathBase": path.Base,
+		"pathDir":  path.Dir,
+		"pathJoin": path.Join,
+
+		"stringTrimPrefix": strings.TrimPrefix,
+		"stringTrimSuffix": strings.TrimSuffix,
+		"stringTrimSpace":  strings.TrimSpace,
+
 		"glob":            fc.glob,
 		"include":         fc.include,
 		"includeCSS":      fc.includeCSS,
@@ -287,7 +293,7 @@ type ImageSrcSet struct {
 	SrcSet string
 }
 
-func (fc *functionContext) readImageSrcSet(src string, srcset string) (*ImageSrcSet, error) {
+func (fc *functionContext) readImageSrcSet(src string) (*ImageSrcSet, error) {
 	fsrc := fc.toFilePath(src)
 	config, err := readImageConfig(fsrc)
 	if err != nil {
@@ -296,7 +302,15 @@ func (fc *functionContext) readImageSrcSet(src string, srcset string) (*ImageSrc
 	result := &ImageSrcSet{Image: Image{Src: src, W: config.Width, H: config.Height}}
 	var buf strings.Builder
 	fmt.Fprintf(&buf, "%s %dw", src, config.Width)
-	fc.visitGlob(srcset, func(fpath, upath string) error {
+
+	sdir, sfile := path.Split(src)
+	dot := strings.LastIndexByte(sfile, '.')
+	dash := strings.LastIndexByte(sfile, '-')
+	if dot < 0 || dash < 0 || dot < dash {
+		return nil, errors.New("src name must be of form <id>-<variant>.<ext>")
+	}
+	glob := path.Join(sdir, sfile[:dash+1]+"*"+sfile[dot:])
+	fc.visitGlob(glob, func(fpath, upath string) error {
 		if fpath == fsrc {
 			return nil
 		}
