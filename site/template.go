@@ -25,6 +25,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	ttemplate "text/template"
 	tparse "text/template/parse"
@@ -152,6 +154,7 @@ func (fc *functionContext) funcs() htemplate.FuncMap {
 		"includeJSStr":    fc.includeJSStr,
 		"readJSON":        fc.readJSON,
 		"readPage":        fc.readPage,
+		"readPages":       fc.readPages,
 		"readImage":       fc.readImage,
 		"readImageSrcSet": fc.readImageSrcSet,
 	}
@@ -189,32 +192,28 @@ func (fc *functionContext) toURLPath(abs bool, fpath string) (string, error) {
 	return filepath.ToSlash(p), nil
 }
 
-func (fc *functionContext) visitGlob(uglob string, visit func(fpath string, upath string) error) error {
+func (fc *functionContext) globInternal(uglob string) (fpaths []string, upaths []string, err error) {
 	fglob := fc.toFilePath(uglob)
-	fpaths, err := filepath.Glob(fglob)
+	fpaths, err = filepath.Glob(fglob)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
+
+	upaths = make([]string, len(fpaths))
 	abs := strings.HasPrefix(uglob, "/")
-	for _, fpath := range fpaths {
-		upath, err := fc.toURLPath(abs, fpath)
+	for i, fpath := range fpaths {
+		upaths[i], err = fc.toURLPath(abs, fpath)
 		if err != nil {
-			return err
-		}
-		if err := visit(fpath, upath); err != nil {
-			return err
+			return nil, nil, err
 		}
 	}
-	return nil
+
+	return fpaths, upaths, nil
 }
 
 func (fc *functionContext) glob(uglob string) ([]string, error) {
-	var result []string
-	err := fc.visitGlob(uglob, func(fpath, upath string) error {
-		result = append(result, upath)
-		return nil
-	})
-	return result, err
+	_, upaths, err := fc.globInternal(uglob)
+	return upaths, err
 }
 
 func (fc *functionContext) include(upath string) (string, error) {
@@ -266,11 +265,67 @@ func (fc *functionContext) readPage(upath string) (*Page, error) {
 	if strings.HasSuffix(upath, "/") {
 		upath += "index.html"
 	}
+
 	fpath := fc.toFilePath(upath)
 	fc.updateModTime(fpath)
+
+	if strings.HasSuffix(upath, "/index.html") {
+		upath = upath[:len(upath)-len("index.html")]
+	}
+
 	p := &Page{Path: upath}
 	_, _, err := readFileWithFrontMatter(fpath, p)
 	return p, err
+}
+
+func (fc *functionContext) readPages(uglob string, options ...string) ([]*Page, error) {
+	if strings.HasSuffix(uglob, "/") {
+		uglob += "index.html"
+	}
+
+	fpaths, upaths, err := fc.globInternal(uglob)
+	if err != nil {
+		return nil, err
+	}
+
+	var pages []*Page
+	for i, fpath := range fpaths {
+		upath := upaths[i]
+
+		fc.updateModTime(fpath)
+		if strings.HasSuffix(upath, "/index.html") {
+			upath = upath[:len(upath)-len("index.html")]
+		}
+
+		page := &Page{Path: upath}
+		_, _, err := readFileWithFrontMatter(fpath, page)
+		if err != nil {
+			return nil, err
+		}
+		pages = append(pages, page)
+	}
+
+	for _, option := range options {
+		switch {
+		case option == "sort:-Created":
+			sort.Slice(pages, func(i, j int) bool {
+				return pages[j].Created.Before(pages[i].Created)
+			})
+		case strings.HasPrefix(option, "limit:"):
+			s := option[len("limit:"):]
+			n, err := strconv.Atoi(s)
+			if err != nil {
+				return nil, fmt.Errorf("readPages: invalid limit %q", s)
+			}
+			if n < len(pages) {
+				pages = pages[:n]
+			}
+		default:
+			return nil, fmt.Errorf("readPages: invalid option %q", option)
+		}
+	}
+
+	return pages, nil
 }
 
 type Image struct {
@@ -309,18 +364,19 @@ func (fc *functionContext) readImageSrcSet(src string) (*ImageSrcSet, error) {
 	if dot < 0 || dash < 0 || dot < dash {
 		return nil, errors.New("src name must be of form <id>-<variant>.<ext>")
 	}
-	glob := path.Join(sdir, sfile[:dash+1]+"*"+sfile[dot:])
-	fc.visitGlob(glob, func(fpath, upath string) error {
+	uglob := path.Join(sdir, sfile[:dash+1]+"*"+sfile[dot:])
+
+	fpaths, upaths, err := fc.globInternal(uglob)
+	for i, fpath := range fpaths {
 		if fpath == fsrc {
-			return nil
+			continue
 		}
 		config, err := readImageConfig(fpath)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		fmt.Fprintf(&buf, ", %s %dw", upath, config.Width)
-		return nil
-	})
+		fmt.Fprintf(&buf, ", %s %dw", upaths[i], config.Width)
+	}
 	result.SrcSet = buf.String()
 	return result, err
 }
