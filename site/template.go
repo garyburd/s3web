@@ -145,6 +145,8 @@ func (fc *functionContext) funcs() htemplate.FuncMap {
 		"stringTrimSuffix": strings.TrimSuffix,
 		"stringTrimSpace":  strings.TrimSpace,
 
+		"timeNow": time.Now,
+
 		"glob":            fc.glob,
 		"include":         fc.include,
 		"includeCSS":      fc.includeCSS,

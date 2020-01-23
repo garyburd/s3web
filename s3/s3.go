@@ -91,7 +91,7 @@ func run() {
 		log.Fatal(err)
 	}
 
-	var resourceModified bool
+	var invalidatePath string
 	for _, r := range resources {
 		log.Printf("%s %s\n", r.UpdateReason, r.Path)
 		if *dryRun {
@@ -101,7 +101,11 @@ func run() {
 		if r.FilePath != "" || r.Data != nil {
 			err = u.uploadResource(r)
 			if r.UpdateReason != updateNew {
-				resourceModified = true
+				if invalidatePath == "" {
+					invalidatePath = r.Path
+				} else {
+					invalidatePath = "/*"
+				}
 			}
 		} else {
 			err = u.deleteResource(r)
@@ -111,9 +115,12 @@ func run() {
 		}
 	}
 
-	if !*dryRun && *invalidate && resourceModified && u.config.CloudFrontDistributionID != "" {
-		log.Printf("Invalidating CloudFront distribution")
-		err := u.invalidateDistribution()
+	if !*dryRun && *invalidate && invalidatePath != "" && u.config.CloudFrontDistributionID != "" {
+		if strings.HasSuffix(invalidatePath, "/index.html") {
+			invalidatePath = invalidatePath[:len(invalidatePath)-len("index.html")]
+		}
+		log.Printf("Invalidating CloudFront distribution: %s", invalidatePath)
+		err := u.invalidateDistribution(invalidatePath)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -267,13 +274,13 @@ func (u *updater) deleteResource(r *site.Resource) error {
 	return err
 }
 
-func (u *updater) invalidateDistribution() error {
+func (u *updater) invalidateDistribution(path string) error {
 	_, err := u.cf.CreateInvalidation(&cloudfront.CreateInvalidationInput{
 		DistributionId: aws.String(u.config.CloudFrontDistributionID),
 		InvalidationBatch: &cloudfront.InvalidationBatch{
 			CallerReference: aws.String(time.Now().String()),
 			Paths: &cloudfront.Paths{
-				Items:    []*string{aws.String("/*")},
+				Items:    []*string{aws.String(path)},
 				Quantity: aws.Int64(1),
 			},
 		},
