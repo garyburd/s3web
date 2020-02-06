@@ -1,4 +1,4 @@
-module github.com/garyburd/staticsite
+module github.com/garyburd/s3web
 
 go 1.13
 
