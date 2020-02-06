@@ -261,7 +261,7 @@ func (u *updater) uploadResource(r *site.Resource) error {
 		Body:         f,
 		ContentType:  aws.String(ct),
 		ACL:          aws.String("public-read"),
-		CacheControl: aws.String(fmt.Sprintf("max-age=%d", u.config.MaxAge)),
+		CacheControl: aws.String(fmt.Sprintf("public, max-age=%d", u.config.MaxAge)),
 	})
 	return err
 }
