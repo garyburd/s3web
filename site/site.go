@@ -17,6 +17,7 @@ package site
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path"
@@ -71,6 +72,9 @@ func (s *site) readResource(fpath string, info os.FileInfo) (*Resource, error) {
 	}
 
 	p := &Page{Path: r.Path}
+	if strings.HasSuffix(p.Path, "/index.html") {
+		p.Path = p.Path[:len(p.Path)-len("index.html")]
+	}
 
 	data, hasFrontMatter, err := readFileWithFrontMatter(fpath, p)
 	if err != nil {
@@ -143,7 +147,7 @@ func (s *site) readTemplate(rpath, upath string) (*template, error) {
 
 	info, err := os.Stat(fpath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s:1: %w", s.toFilePath(rpath), err)
 	}
 
 	var l layout
