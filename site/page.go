@@ -42,6 +42,9 @@ type Page struct {
 	// Data contains arbitrary data for use by the site.
 	Data map[string]interface{}
 
+	// Redirect to this path when set.
+	Redirect string
+
 	// Path used to load the page.
 	Path string `json:"-"`
 

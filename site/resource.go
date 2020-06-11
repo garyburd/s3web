@@ -41,6 +41,9 @@ type Resource struct {
 	FilePath string
 	Data     []byte
 
+	// Redirect to this path when set.
+	Redirect string
+
 	UpdateReason string
 }
 

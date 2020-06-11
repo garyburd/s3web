@@ -16,6 +16,7 @@ package serve
 
 import (
 	"flag"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -73,5 +74,13 @@ func (h handler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 
 	resp.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	resp.Header().Set("Content-Type", ct)
+
+	if r.Redirect != "" {
+		resp.Header().Set("Location", r.Redirect)
+		resp.WriteHeader(http.StatusFound)
+		io.Copy(resp, f)
+		return
+	}
+
 	http.ServeContent(resp, req, r.Path, r.ModTime, f)
 }

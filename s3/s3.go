@@ -266,14 +266,18 @@ func (u *updater) uploadResource(r *site.Resource) error {
 		return err
 	}
 	defer f.Close()
-	_, err = u.s3.PutObject(&s3.PutObjectInput{
+	input := &s3.PutObjectInput{
 		Bucket:       aws.String(u.config.Bucket),
 		Key:          aws.String(r.Path[1:]),
 		Body:         f,
 		ContentType:  aws.String(ct),
 		ACL:          aws.String("public-read"),
 		CacheControl: aws.String(fmt.Sprintf("public, max-age=%d", u.config.MaxAge)),
-	})
+	}
+	if r.Redirect != "" {
+		input.WebsiteRedirectLocation = aws.String(r.Redirect)
+	}
+	_, err = u.s3.PutObject(input)
 	return err
 }
 

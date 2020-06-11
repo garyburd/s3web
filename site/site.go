@@ -51,7 +51,8 @@ func (s *site) toFilePath(upath string) string {
 	return filepath.Join(s.dir, filepath.FromSlash(upath[1:]))
 }
 
-var frontMatterExts = map[string]bool{
+var frontMatterExtensions = map[string]bool{
+	"":      true,
 	".html": true,
 	".htm":  true,
 }
@@ -65,7 +66,7 @@ func (s *site) readResource(fpath string, info os.FileInfo) (*Resource, error) {
 		r.Path = filepath.ToSlash(fpath[len(s.dir):])
 	}
 
-	if _, ok := frontMatterExts[filepath.Ext(fpath)]; !ok {
+	if _, ok := frontMatterExtensions[filepath.Ext(fpath)]; !ok {
 		r.FilePath = fpath
 		r.Size = info.Size()
 		return r, nil
@@ -93,6 +94,8 @@ func (s *site) readResource(fpath string, info os.FileInfo) (*Resource, error) {
 		r.Size = int64(len(r.Data))
 		return r, nil
 	}
+
+	r.Redirect = p.Redirect
 
 	t, err := s.readTemplate(r.Path, p.Layout)
 	if err != nil {
