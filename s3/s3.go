@@ -20,7 +20,10 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"mime"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -86,32 +89,28 @@ func run() {
 	u.s3 = s3.New(sess, aws.NewConfig().WithRegion(u.config.Region))
 	u.cf = cloudfront.New(sess)
 
-	resources, err := u.getResourcesToUpdate()
+	uploadResources, deletePaths, err := u.getResourcesToUpdate()
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	sortUploads(uploadResources)
+
 	var invalidatePath string
-	for _, r := range resources {
+	for _, r := range uploadResources {
 		log.Printf("%s %s\n", r.UpdateReason, r.Path)
 		if *dryRun {
 			continue
 		}
-		var err error
-		if r.FilePath != "" || r.Data != nil {
-			err = u.uploadResource(r)
-			if r.UpdateReason != updateNew {
-				if invalidatePath == "" {
-					invalidatePath = r.Path
-				} else {
-					invalidatePath = "/*"
-				}
-			}
-		} else {
-			err = u.deleteResource(r)
-		}
-		if err != nil {
+		if err := u.uploadResource(r); err != nil {
 			log.Fatal(err)
+		}
+		if r.UpdateReason != updateNew {
+			if invalidatePath == "" {
+				invalidatePath = r.Path
+			} else {
+				invalidatePath = "/*"
+			}
 		}
 	}
 
@@ -122,6 +121,16 @@ func run() {
 		log.Printf("Invalidating CloudFront distribution: %s", invalidatePath)
 		err := u.invalidateDistribution(invalidatePath)
 		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	for _, p := range deletePaths {
+		log.Printf("D %s\n", p)
+		if *dryRun {
+			continue
+		}
+		if err := u.deleteResource(p); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -192,13 +201,13 @@ const (
 	updateSizeChange = "S"
 )
 
-func (u *updater) getResourcesToUpdate() ([]*site.Resource, error) {
+func (u *updater) getResourcesToUpdate() ([]*site.Resource, []string, error) {
 	objects, err := u.readObjects()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	var resources []*site.Resource
+	var uploadResources []*site.Resource
 	err = site.Walk(u.dir, func(r *site.Resource) error {
 		key := r.Path[1:]
 		o, ok := objects[key]
@@ -228,14 +237,16 @@ func (u *updater) getResourcesToUpdate() ([]*site.Resource, error) {
 				}
 			}
 		}
-		resources = append(resources, r)
+		uploadResources = append(uploadResources, r)
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Find resources to delete. Skip unmanaged.
+
+	var deletePaths []string
 delete:
 	for key := range objects {
 		path := "/" + key
@@ -244,9 +255,9 @@ delete:
 				continue delete
 			}
 		}
-		resources = append(resources, &site.Resource{Path: path, UpdateReason: "D"})
+		deletePaths = append(deletePaths, path)
 	}
-	return resources, err
+	return uploadResources, deletePaths, err
 }
 
 func (u *updater) uploadResource(r *site.Resource) error {
@@ -266,10 +277,10 @@ func (u *updater) uploadResource(r *site.Resource) error {
 	return err
 }
 
-func (u *updater) deleteResource(r *site.Resource) error {
+func (u *updater) deleteResource(p string) error {
 	_, err := u.s3.DeleteObject(&s3.DeleteObjectInput{
 		Bucket: aws.String(u.config.Bucket),
-		Key:    aws.String(r.Path[1:]),
+		Key:    aws.String(p[1:]),
 	})
 	return err
 }
@@ -286,4 +297,54 @@ func (u *updater) invalidateDistribution(path string) error {
 		},
 	})
 	return err
+}
+
+var lastTypes = map[string]bool{
+	"text/html":              true,
+	"text/css":               true,
+	"application/javascript": true,
+}
+
+// sortUploads sorts the resources to minimize breakage as resources are
+// uploaded.
+func sortUploads(resources []*site.Resource) {
+	sort.Slice(resources, func(i, j int) bool {
+
+		// Avoid dangling links by uploading new resources first.
+		ni := resources[i].UpdateReason == updateNew
+		nj := resources[j].UpdateReason == updateNew
+		if ni != nj {
+			if ni {
+				return true
+			} else if nj {
+				return false
+			}
+		} else if ni {
+			return resources[i].Path < resources[j].Path
+		}
+
+		// HTML, CSS and JavaScript files tend to have tighter
+		// dependencies than images and other resources. Upload
+		// HTML, CSS and JavaScript files together at the end.
+		ti := mime.TypeByExtension(path.Ext(resources[i].Path))
+		if k := strings.Index(ti, ";"); k > 0 {
+			ti = ti[:k]
+		}
+		tj := mime.TypeByExtension(path.Ext(resources[j].Path))
+		if k := strings.Index(tj, ";"); k > 0 {
+			tj = tj[:k]
+		}
+		li := lastTypes[ti]
+		lj := lastTypes[tj]
+
+		if li != lj {
+			if li {
+				return false
+			} else if lj {
+				return true
+			}
+		}
+
+		return resources[i].Path < resources[j].Path
+	})
 }

@@ -39,8 +39,8 @@ type Page struct {
 	// Updated is the time that the page was updated.
 	Updated time.Time
 
-	// Params contains arbitrary data for use by the site.
-	Params map[string]interface{}
+	// Data contains arbitrary data for use by the site.
+	Data map[string]interface{}
 
 	// Path used to load the page.
 	Path string `json:"-"`

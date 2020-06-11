@@ -121,6 +121,13 @@ func (s *site) readResource(fpath string, info os.FileInfo) (*Resource, error) {
 	return r, nil
 }
 
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
 // layout is the front matter for template files.
 type layout struct {
 	// Layout is the path to the parent layout.
