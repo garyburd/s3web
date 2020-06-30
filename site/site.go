@@ -22,7 +22,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -183,11 +182,6 @@ func (s *site) readTemplate(rpath, upath string) (*template, error) {
 	return t, nil
 }
 
-var (
-	frontStart = regexp.MustCompile(`(?m)\A{\s*`)
-	frontEnd   = regexp.MustCompile(`(?m)^}\s*$`)
-)
-
 func readFileWithFrontMatter(fpath string, fm interface{}) ([]byte, bool, error) {
 
 	data, err := ioutil.ReadFile(fpath)
@@ -195,21 +189,18 @@ func readFileWithFrontMatter(fpath string, fm interface{}) ([]byte, bool, error)
 		return nil, false, err
 	}
 
-	if m := frontStart.FindIndex(data); m == nil {
-		return data, false, nil
-	}
-	m := frontEnd.FindIndex(data)
-	if m == nil {
+	n := FrontMatterEnd(data)
+	if n < 0 {
 		return data, false, nil
 	}
 
-	err = DecodeConfig(fpath, data[:m[1]], fm)
+	err = DecodeConfig(fpath, data[:n], fm)
 	if err != nil {
 		return nil, false, err
 	}
 
 	// Overwrite front matter with spaces.
-	for i := range data[:m[1]] {
+	for i := range data[:n] {
 		if data[i] != '\n' {
 			data[i] = ' '
 		}

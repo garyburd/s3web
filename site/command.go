@@ -22,6 +22,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"regexp"
 )
 
 const ConfigDir = "/_config"
@@ -31,6 +32,7 @@ type Command struct {
 	FlagSet *flag.FlagSet
 	Usage   string
 	Run     func()
+	Help    string
 }
 
 func DecodeConfig(fpath string, data []byte, v interface{}) error {
@@ -45,4 +47,20 @@ func DecodeConfig(fpath string, data []byte, v interface{}) error {
 		return fmt.Errorf("%s:1: %w", fpath, err)
 	}
 	return nil
+}
+
+var (
+	frontStart = regexp.MustCompile(`(?m)\A{\s*`)
+	frontEnd   = regexp.MustCompile(`(?m)^}\s*$`)
+)
+
+func FrontMatterEnd(data []byte) int {
+	if m := frontStart.FindIndex(data); m == nil {
+		return -1
+	}
+	m := frontEnd.FindIndex(data)
+	if m == nil {
+		return -1
+	}
+	return m[1]
 }

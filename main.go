@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/garyburd/staticsite/check"
+	fmtcmd "github.com/garyburd/staticsite/fmt"
 	"github.com/garyburd/staticsite/s3"
 	"github.com/garyburd/staticsite/serve"
 	"github.com/garyburd/staticsite/site"
@@ -31,6 +32,7 @@ var commands = []*site.Command{
 	serve.Command,
 	s3.Command,
 	check.Command,
+	fmtcmd.Command,
 }
 
 func main() {
@@ -46,6 +48,10 @@ func main() {
 	for _, c := range commands {
 		if args[0] == c.Name {
 			c.FlagSet.Usage = func() {
+				if c.Help != "" {
+					log.Print(strings.TrimSpace(c.Help))
+					log.Print("\n\n")
+				}
 				log.Println(c.Usage)
 				c.FlagSet.PrintDefaults()
 				os.Exit(2)
