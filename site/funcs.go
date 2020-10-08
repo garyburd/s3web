@@ -44,6 +44,7 @@ func (fc *functionContext) funcs() htemplate.FuncMap {
 		"stringTrimPrefix": strings.TrimPrefix,
 		"stringTrimSuffix": strings.TrimSuffix,
 		"stringTrimSpace":  strings.TrimSpace,
+		"stringReplaceAll": strings.ReplaceAll,
 
 		"timeNow": time.Now,
 
