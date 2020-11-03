@@ -79,9 +79,10 @@ func (t *template) execute(s *site, p *Page) ([]byte, time.Time, error) {
 	fdir := s.toFilePath(udir)
 
 	fc := functionContext{
-		site: s,
-		udir: udir,
-		fdir: fdir,
+		site:  s,
+		udir:  udir,
+		fdir:  fdir,
+		fname: p.Path,
 	}
 	t.exec.Funcs(fc.funcs())
 

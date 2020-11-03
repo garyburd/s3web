@@ -7,6 +7,7 @@ import (
 	htemplate "html/template"
 	"image"
 	"io/ioutil"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -15,8 +16,6 @@ import (
 	"strings"
 	"time"
 )
-
-type slice []interface{}
 
 // functionContext is the context for template functions.
 type functionContext struct {
@@ -31,11 +30,15 @@ type functionContext struct {
 
 	// Current page file directory.
 	fdir string
+
+	// Current page file name.
+	fname string
 }
 
 func (fc *functionContext) funcs() htemplate.FuncMap {
 	return htemplate.FuncMap{
-		"slice": func(v ...interface{}) []interface{} { return slice(v) },
+		"makeSlice": func(v ...interface{}) []interface{} { return v },
+		"dict":      dict,
 
 		"pathBase": path.Base,
 		"pathDir":  path.Dir,
@@ -61,6 +64,21 @@ func (fc *functionContext) funcs() htemplate.FuncMap {
 		"readImage":       fc.readImage,
 		"readImageSrcSet": fc.readImageSrcSet,
 	}
+}
+
+func dict(values ...interface{}) (map[string]interface{}, error) {
+	if len(values)%2 != 0 {
+		return nil, errors.New("dict: must have even number of arguments")
+	}
+	dict := make(map[string]interface{}, len(values)/2)
+	for i := 0; i < len(values); i += 2 {
+		key, ok := values[i].(string)
+		if !ok {
+			return nil, fmt.Errorf("dict: key %v is not a string", values[i])
+		}
+		dict[key] = values[i+1]
+	}
+	return dict, nil
 }
 
 func (fc *functionContext) updateModTime(fpath string) error {
@@ -232,18 +250,18 @@ func (fc *functionContext) readPages(uglob string, options ...string) ([]*Page, 
 }
 
 type Image struct {
-	W   int
-	H   int
-	Src string
+	Width  int
+	Height int
+	Src    string
 }
 
 func (img *Image) SrcWidthHeight() htemplate.HTMLAttr {
-	return htemplate.HTMLAttr(fmt.Sprintf(`src="%s" width="%d" height="%d"`, img.Src, img.W, img.H))
+	return htemplate.HTMLAttr(fmt.Sprintf(`src="%s" width="%d" height="%d"`, img.Src, img.Width, img.Height))
 }
 
 func (fc *functionContext) readImage(upath string) (*Image, error) {
 	config, err := readImageConfig(fc.toFilePath(upath))
-	return &Image{Src: upath, W: config.Width, H: config.Height}, err
+	return &Image{Src: upath, Width: config.Width, Height: config.Height}, err
 }
 
 type ImageSrcSet struct {
@@ -251,37 +269,75 @@ type ImageSrcSet struct {
 	SrcSet string
 }
 
-func (fc *functionContext) readImageSrcSet(src string) (*ImageSrcSet, error) {
-	fsrc := fc.toFilePath(src)
-	config, err := readImageConfig(fsrc)
+func (fc *functionContext) readImageSrcSet(uglob string, maxWidth int, maxHeight int) (*ImageSrcSet, error) {
+
+	fpaths, upaths, err := fc.globInternal(uglob)
 	if err != nil {
 		return nil, err
 	}
-	result := &ImageSrcSet{Image: Image{Src: src, W: config.Width, H: config.Height}}
-	var buf strings.Builder
-	fmt.Fprintf(&buf, "%s %dw", src, config.Width)
 
-	sdir, sfile := path.Split(src)
-	dot := strings.LastIndexByte(sfile, '.')
-	dash := strings.LastIndexByte(sfile, '-')
-	if dot < 0 || dash < 0 || dot < dash {
-		return nil, errors.New("src name must be of form <id>-<variant>.<ext>")
+	if len(fpaths) == 0 {
+		return nil, fmt.Errorf("%s - no images found for %s", fc.fname, uglob)
 	}
-	uglob := path.Join(sdir, sfile[:dash+1]+"*"+sfile[dot:])
 
-	fpaths, upaths, err := fc.globInternal(uglob)
+	configs := make([]image.Config, len(fpaths))
 	for i, fpath := range fpaths {
-		if fpath == fsrc {
-			continue
-		}
 		config, err := readImageConfig(fpath)
 		if err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(&buf, ",%s %dw", upaths[i], config.Width)
+		configs[i] = config
 	}
-	result.SrcSet = buf.String()
-	return result, err
+
+	return computeSrcSet(fpaths, upaths, configs, maxWidth, maxHeight)
+}
+
+func computeSrcSet(fpaths []string, upaths []string, configs []image.Config, maxWidth int, maxHeight int) (*ImageSrcSet, error) {
+
+	if maxWidth <= 0 {
+		return nil, errors.New("imageSrcSet: maxWidth must be greater than zero")
+	}
+
+	bestIndex := 0
+	bestScale := math.MaxFloat64
+	var buf strings.Builder
+
+	for i, config := range configs {
+		if config.Width <= 0 || config.Height <= 0 {
+			return nil, fmt.Errorf("imageSrcSet: image %s no width or height", fpaths[i])
+		}
+
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		fmt.Fprintf(&buf, "%s %dw", upaths[i], config.Width)
+
+		scale := float64(maxWidth) / float64(config.Width)
+		if maxHeight > 0 {
+			scaleH := float64(maxHeight) / float64(config.Height)
+			if scaleH <= 1 && scaleH < scale {
+				scale = scaleH
+			}
+		}
+
+		if (bestScale > 1 && scale < bestScale) ||
+			(bestScale < 1 && scale > bestScale && scale <= 1) {
+			bestIndex = i
+			bestScale = scale
+		}
+	}
+
+	// Don't stretch undersize image.
+	if bestScale > 1 {
+		bestScale = 1
+	}
+
+	return &ImageSrcSet{SrcSet: buf.String(),
+		Image: Image{
+			Src:    upaths[bestIndex],
+			Width:  int(float64(configs[bestIndex].Width) * bestScale),
+			Height: int(float64(configs[bestIndex].Height) * bestScale),
+		}}, nil
 }
 
 func readImageConfig(fpath string) (image.Config, error) {
