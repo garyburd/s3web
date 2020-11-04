@@ -27,7 +27,7 @@ import (
 var (
 	flagSet  = flag.NewFlagSet("serve", flag.ExitOnError)
 	httpAddr = flagSet.String("addr", "127.0.0.1:8080", "serve site at `address`")
-	Command  = &site.Command{
+	Tool     = &site.Tool{
 		Name:    "serve",
 		Usage:   "serve [directoy]",
 		FlagSet: flagSet,

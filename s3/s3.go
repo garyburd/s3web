@@ -41,7 +41,7 @@ var (
 	force      = flagSet.Bool("f", false, "Force upload of all files")
 	invalidate = flagSet.Bool("i", true, "Invalidate cloudfront distribution")
 
-	Command = &site.Command{
+	Tool = &site.Tool{
 		Name:    "s3",
 		Usage:   "s3 [dir]",
 		FlagSet: flagSet,

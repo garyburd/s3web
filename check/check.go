@@ -23,7 +23,7 @@ import (
 
 var (
 	flagSet = flag.NewFlagSet("check", flag.ExitOnError)
-	Command = &site.Command{
+	Tool    = &site.Tool{
 		Name:    "check",
 		Usage:   "check [directory]",
 		FlagSet: flagSet,

@@ -38,7 +38,7 @@ var (
 	write   = flagSet.Bool("w", false, `Do not print reformatted sources `+
 		`to standard output. If a file's formatting is different from `+
 		`fmt's, overwrite it with fmt's version.`)
-	Command = &site.Command{
+	Tool = &site.Tool{
 		Name:    "fmt",
 		Usage:   "fmt [path...]",
 		FlagSet: flagSet,

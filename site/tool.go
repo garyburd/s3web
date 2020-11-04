@@ -14,7 +14,7 @@
 
 package site
 
-// Utilities for commands.
+// Utilities for tools.
 
 import (
 	"bytes"
@@ -27,7 +27,7 @@ import (
 
 const ConfigDir = "/_config"
 
-type Command struct {
+type Tool struct {
 	Name    string
 	FlagSet *flag.FlagSet
 	Usage   string

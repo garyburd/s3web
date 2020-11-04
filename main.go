@@ -28,11 +28,11 @@ import (
 	"github.com/garyburd/staticsite/site"
 )
 
-var commands = []*site.Command{
-	serve.Command,
-	s3.Command,
-	check.Command,
-	fmtcmd.Command,
+var tools = []*site.Tool{
+	serve.Tool,
+	s3.Tool,
+	check.Tool,
+	fmtcmd.Tool,
 }
 
 func main() {
@@ -45,19 +45,19 @@ func main() {
 		flag.Usage()
 		return
 	}
-	for _, c := range commands {
-		if args[0] == c.Name {
-			c.FlagSet.Usage = func() {
-				if c.Help != "" {
-					log.Print(strings.TrimSpace(c.Help))
+	for _, t := range tools {
+		if args[0] == t.Name {
+			t.FlagSet.Usage = func() {
+				if t.Help != "" {
+					log.Print(strings.TrimSpace(t.Help))
 					log.Print("\n\n")
 				}
-				log.Println(c.Usage)
-				c.FlagSet.PrintDefaults()
+				log.Println(t.Usage)
+				t.FlagSet.PrintDefaults()
 				os.Exit(2)
 			}
-			c.FlagSet.Parse(args[1:])
-			c.Run()
+			t.FlagSet.Parse(args[1:])
+			t.Run()
 			return
 		}
 	}
@@ -66,8 +66,8 @@ func main() {
 
 func printUsage() {
 	var names []string
-	for _, c := range commands {
-		names = append(names, c.Name)
+	for _, t := range tools {
+		names = append(names, t.Name)
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", os.Args[0], strings.Join(names, " | "))
 	flag.PrintDefaults()
