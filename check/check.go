@@ -32,7 +32,7 @@ var (
 )
 
 func run() {
-	err := site.Walk(flagSet.Arg(0), func(r *site.Resource) error { return nil })
+	err := site.Visit(flagSet.Arg(0), func(r *site.Resource) error { return nil })
 	if err != nil {
 		log.Fatal(err)
 	}

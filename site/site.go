@@ -15,196 +15,91 @@
 package site
 
 import (
-	"bytes"
-	"errors"
-	"fmt"
-	"io/ioutil"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"github.com/garyburd/staticsite/template"
 )
 
 type site struct {
-	// dir is the file system directory for the site
+	// File system directory for the site.
 	dir string
 
-	// templates is a cache of parsed templates. The key is the file path of
-	// the template.
-	templates map[string]*template
+	// Template loader.
+	loader *template.Loader
+
+	// Key is text of reported error messages.  Used to filter duplicate messages.
+	reportedErrors map[string]struct{}
+
+	// Visit function for walk.
+	visitFn func(*Resource) error // Visit function for walk.
+
+	// Previously loaded pages.
+	pages map[string]*Page // Loaded pages.
 }
 
-func newSite(dir string) *site {
+func newSite(dir string, visitFn func(*Resource) error) *site {
 	if dir == "" {
 		dir = "."
 	}
-	return &site{
-		dir:       dir,
-		templates: make(map[string]*template),
+	s := &site{
+		dir:            filepath.Clean(dir),
+		visitFn:        visitFn,
+		reportedErrors: make(map[string]struct{}),
+		pages:          make(map[string]*Page),
 	}
-}
-
-// toFilePath converts an absolute URL path to a file path.
-func (s *site) toFilePath(upath string) string {
-	return filepath.Join(s.dir, filepath.FromSlash(upath[1:]))
-}
-
-var frontMatterExtensions = map[string]bool{
-	"":      true,
-	".html": true,
-	".htm":  true,
-}
-
-func (s *site) readResource(fpath string, info os.FileInfo) (*Resource, error) {
-
-	r := &Resource{ModTime: info.ModTime()}
-	if s.dir == "." {
-		r.Path = "/" + filepath.ToSlash(fpath)
-	} else {
-		r.Path = filepath.ToSlash(fpath[len(s.dir):])
-	}
-
-	if _, ok := frontMatterExtensions[filepath.Ext(fpath)]; !ok {
-		r.FilePath = fpath
-		r.Size = info.Size()
-		return r, nil
-	}
-
-	p := &Page{Path: r.Path}
-	if strings.HasSuffix(p.Path, "/index.html") {
-		p.Path = p.Path[:len(p.Path)-len("index.html")]
-	}
-
-	data, hasFrontMatter, err := readFileWithFrontMatter(fpath, p)
+	var err error
+	s.loader, err = template.NewLoader(filepath.Join(s.dir, LayoutDir), s.templateFuncs())
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
-
-	if !hasFrontMatter {
-		r.Data = data
-		r.Size = int64(len(r.Data))
-		r.FilePath = fpath
-		return r, nil
-	}
-
-	if p.Render == false && p.Layout == "" {
-		r.Data = append(bytes.TrimSpace(data), '\n')
-		r.Size = int64(len(r.Data))
-		return r, nil
-	}
-
-	r.Redirect = p.Redirect
-
-	t, err := s.readTemplate(r.Path, p.Layout)
-	if err != nil {
-		return nil, err
-	}
-	r.ModTime = maxTime(r.ModTime, t.modTime)
-
-	if !p.Render {
-		p.content = data
-	} else {
-		t, err = t.parse(fpath, time.Time{}, data)
-		if err != nil {
-			return nil, err
-		}
-		t.exec = t.clone // no need to clone leaf template
-	}
-
-	data, modTime, err := t.execute(s, p)
-	if err != nil {
-		return nil, err
-	}
-
-	r.Data = append(bytes.TrimSpace(data), '\n')
-	r.Size = int64(len(r.Data))
-	r.ModTime = maxTime(r.ModTime, modTime)
-	return r, nil
+	return s
 }
 
-func maxTime(a, b time.Time) time.Time {
-	if a.After(b) {
-		return a
-	}
-	return b
-}
-
-// layout is the front matter for template files.
-type layout struct {
-	// Layout is the path to the parent layout.
-	Layout string
-}
-
-func (s *site) readTemplate(rpath, upath string) (*template, error) {
-	if upath == "" {
-		return baseTemplate, nil
-	}
-
+func (s *site) filePath(fdir string, udir string, upath string) string {
 	if !strings.HasPrefix(upath, "/") {
-		upath = path.Join(path.Dir(rpath), upath)
+		upath = path.Join(udir, upath)
 	}
-	fpath := s.toFilePath(upath)
-
-	t, ok := s.templates[fpath]
-	if ok {
-		if t == nil {
-			return nil, errors.New("recursive layouts")
-		}
-		return t, nil
-	}
-
-	info, err := os.Stat(fpath)
-	if err != nil {
-		return nil, fmt.Errorf("%s:1: %w", s.toFilePath(rpath), err)
-	}
-
-	var l layout
-	data, _, err := readFileWithFrontMatter(fpath, &l)
-	if err != nil {
-		return nil, err
-	}
-
-	s.templates[fpath] = nil // for detecting recursion
-	t, err = s.readTemplate(upath, l.Layout)
-	delete(s.templates, fpath) // undo recursion check
-
-	if err != nil {
-		return t, err
-	}
-
-	t, err = t.parse(fpath, info.ModTime(), data)
-	if err != nil {
-		return nil, err
-	}
-
-	s.templates[fpath] = t
-	return t, nil
+	return filepath.Join(s.dir, fdir, filepath.FromSlash(upath))
 }
 
-func readFileWithFrontMatter(fpath string, fm interface{}) ([]byte, bool, error) {
-
-	data, err := ioutil.ReadFile(fpath)
+func (s *site) fileGlob(fdir string, udir string, upattern string) (fpaths []string, upaths []string, err error) {
+	fpattern := s.filePath(fdir, udir, upattern)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
 
-	n := FrontMatterEnd(data)
-	if n < 0 {
-		return data, false, nil
-	}
-
-	err = DecodeConfig(fpath, data[:n], fm)
+	fpaths, err = filepath.Glob(fpattern)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
 
-	// Overwrite front matter with spaces.
-	for i := range data[:n] {
-		if data[i] != '\n' {
-			data[i] = ' '
+	upaths = make([]string, len(fpaths))
+	base := filepath.Join(s.dir, fdir)
+	for i, fpath := range fpaths {
+		p, err := filepath.Rel(base, fpath)
+		if err != nil {
+			return nil, nil, err
 		}
+		upaths[i] = shortPath(udir, "/"+filepath.ToSlash(p))
 	}
+	return fpaths, upaths, nil
+}
 
-	return data, true, nil
+func shortPath(udir string, p string) string {
+	if strings.HasSuffix(p, "/index.html") {
+		p = p[:len(p)-len("index.html")]
+	}
+	if udir == "" {
+		return p
+	}
+	if udir == "/" {
+		p = strings.TrimPrefix(p, "/")
+	} else if len(p) > len(udir) &&
+		p[:len(udir)] == udir &&
+		p[len(udir)] == '/' {
+		p = p[len(udir)+1:]
+	}
+	return p
 }

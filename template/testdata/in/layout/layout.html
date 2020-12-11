@@ -1,0 +1,11 @@
+{{define "_"}}
+  {{.Include "style" "layout/layout.css"}}
+{{end -}}
+<html>
+<head>
+<style>{{template "style"}}</style>
+<head>
+<body>
+{{block "body" .}}body!{{end}}
+</body>
+</html>

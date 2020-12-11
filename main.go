@@ -22,7 +22,6 @@ import (
 	"strings"
 
 	"github.com/garyburd/staticsite/check"
-	fmtcmd "github.com/garyburd/staticsite/fmt"
 	"github.com/garyburd/staticsite/s3"
 	"github.com/garyburd/staticsite/serve"
 	"github.com/garyburd/staticsite/site"
@@ -32,12 +31,12 @@ var tools = []*site.Tool{
 	serve.Tool,
 	s3.Tool,
 	check.Tool,
-	fmtcmd.Tool,
 }
 
 func main() {
 	log.SetFlags(0)
 	flag.Usage = printUsage
+	flag.BoolVar(&site.Verbose, "v", false, "Verbose output.")
 	flag.Parse()
 
 	args := flag.Args()

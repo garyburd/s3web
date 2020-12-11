@@ -4,6 +4,10 @@ go 1.13
 
 require (
 	github.com/aws/aws-sdk-go v1.31.3
-	golang.org/x/net v0.0.0-20200226121028-0de0cce0169b // indirect
-	golang.org/x/tools v0.0.0-20200626171337-aa94e735be7f // indirect
+	github.com/davecgh/go-spew v1.1.0
+	github.com/dvyukov/go-fuzz v0.0.0-20201127111758-49e582c6c23d // indirect
+	github.com/elazarl/go-bindata-assetfs v1.0.1 // indirect
+	github.com/stephens2424/writerset v1.0.2 // indirect
+	golang.org/x/mod v0.4.0 // indirect
+	golang.org/x/tools v0.0.0-20201202200335-bef1c476418a // indirect
 )

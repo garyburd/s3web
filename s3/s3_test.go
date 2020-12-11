@@ -22,8 +22,8 @@ import (
 
 var (
 	sortInput = []*site.Resource{
-		{Path: "/a.html"},
 		{Path: "/a.css"},
+		{Path: "/a.html"},
 
 		{Path: "/b.jpg"},
 		{Path: "/b.png"},
@@ -33,8 +33,8 @@ var (
 	}
 
 	sortOutput = []string{
-		"/c.html",
 		"/c.jpg",
+		"/c.html",
 		"/b.jpg",
 		"/b.png",
 		"/a.css",

@@ -18,7 +18,6 @@ import (
 	"crypto/md5"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"mime"
 	"path"
@@ -141,12 +140,7 @@ func run() {
 func (u *updater) readConfig() error {
 	fpath := filepath.Join(u.dir, filepath.FromSlash(site.ConfigDir), "s3.json")
 
-	data, err := ioutil.ReadFile(fpath)
-	if err != nil {
-		return err
-	}
-
-	err = site.DecodeConfig(fpath, data, &u.config)
+	err := site.DecodeConfigFile(fpath, &u.config)
 	if err != nil {
 		return err
 	}
@@ -185,10 +179,10 @@ func (u *updater) readObjects() (map[string]*s3.Object, error) {
 		for _, o := range out.Contents {
 			objects[aws.StringValue(o.Key)] = o
 		}
-		continuationToken = out.ContinuationToken
-		if aws.StringValue(continuationToken) == "" {
+		if !aws.BoolValue(out.IsTruncated) {
 			break
 		}
+		continuationToken = out.NextContinuationToken
 	}
 	return objects, nil
 }
@@ -208,7 +202,7 @@ func (u *updater) getResourcesToUpdate() ([]*site.Resource, []string, error) {
 	}
 
 	var uploadResources []*site.Resource
-	err = site.Walk(u.dir, func(r *site.Resource) error {
+	err = site.Visit(u.dir, func(r *site.Resource) error {
 		key := r.Path[1:]
 		o, ok := objects[key]
 		if !ok {
@@ -312,7 +306,7 @@ var lastTypes = map[string]bool{
 // sortUploads sorts the resources to minimize breakage as resources are
 // uploaded.
 func sortUploads(resources []*site.Resource) {
-	sort.Slice(resources, func(i, j int) bool {
+	sort.SliceStable(resources, func(i, j int) bool {
 
 		// Avoid dangling links by uploading new resources first.
 		ni := resources[i].UpdateReason == updateNew
@@ -323,8 +317,6 @@ func sortUploads(resources []*site.Resource) {
 			} else if nj {
 				return false
 			}
-		} else if ni {
-			return resources[i].Path < resources[j].Path
 		}
 
 		// HTML, CSS and JavaScript files tend to have tighter
@@ -349,6 +341,6 @@ func sortUploads(resources []*site.Resource) {
 			}
 		}
 
-		return resources[i].Path < resources[j].Path
+		return false
 	})
 }

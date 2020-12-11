@@ -14,15 +14,7 @@
 
 package site_test
 
-import (
-	"bytes"
-	"io/ioutil"
-	"path/filepath"
-	"testing"
-
-	"github.com/garyburd/staticsite/site"
-)
-
+/*
 func TestWalk(t *testing.T) {
 	err := site.Walk("testdata/site", func(r *site.Resource) error {
 		fpath := filepath.Join("testdata/output", filepath.FromSlash(r.Path))
@@ -49,3 +41,4 @@ func TestWalk(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+*/

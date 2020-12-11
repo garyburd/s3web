@@ -37,7 +37,7 @@ var (
 
 func run() {
 	h := make(handler)
-	err := site.Walk(flagSet.Arg(0), func(r *site.Resource) error {
+	err := site.Visit(flagSet.Arg(0), func(r *site.Resource) error {
 		h[r.Path] = r
 		return nil
 	})

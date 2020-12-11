@@ -1,72 +1,57 @@
 package site
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	htemplate "html/template"
 	"image"
-	"io/ioutil"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"math"
 	"os"
 	"path"
-	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
 
-// functionContext is the context for template functions.
-type functionContext struct {
-	// The site.
-	site *site
-
-	// modTime is maxiumum modification time of any referenced file.
-	modTime time.Time
-
-	// Current page URL directory.
-	udir string
-
-	// Current page file directory.
-	fdir string
-
-	// Current page file name.
-	fname string
-}
-
-func (fc *functionContext) funcs() htemplate.FuncMap {
-	return htemplate.FuncMap{
-		"makeSlice": func(v ...interface{}) []interface{} { return v },
-		"dict":      dict,
-
-		"pathBase": path.Base,
-		"pathDir":  path.Dir,
-		"pathJoin": path.Join,
-
-		"stringTrimPrefix": strings.TrimPrefix,
-		"stringTrimSuffix": strings.TrimSuffix,
-		"stringTrimSpace":  strings.TrimSpace,
-		"stringReplaceAll": strings.ReplaceAll,
-
-		"timeNow": time.Now,
-
-		"glob":            fc.glob,
-		"include":         fc.include,
-		"includeCSS":      fc.includeCSS,
-		"includeHTML":     fc.includeHTML,
-		"includeHTMLAttr": fc.includeHTMLAttr,
-		"includeJS":       fc.includeJS,
-		"includeJSStr":    fc.includeJSStr,
-		"readJSON":        fc.readJSON,
-		"readPage":        fc.readPage,
-		"readPages":       fc.readPages,
-		"readImage":       fc.readImage,
-		"readImageSrcSet": fc.readImageSrcSet,
+func (site *site) templateFuncs() map[string]interface{} {
+	image := imageFuncs{site}
+	page := pageFuncs{site}
+	time := timeFuncs{time.Now()} // snap time once for consitency across pages.
+	return map[string]interface{}{
+		"image":   func() imageFuncs { return image },
+		"page":    func() pageFuncs { return page },
+		"path":    func() pathFuncs { return pathFuncs{} },
+		"strings": func() stringFuncs { return stringFuncs{} },
+		"time":    func() timeFuncs { return time },
+		"util":    func() utilFuncs { return utilFuncs{} },
 	}
 }
 
-func dict(values ...interface{}) (map[string]interface{}, error) {
+type stringFuncs struct{}
+
+func (stringFuncs) TrimPrefix(s, prefix string) string   { return strings.TrimPrefix(s, prefix) }
+func (stringFuncs) TrimSuffix(s, suffix string) string   { return strings.TrimPrefix(s, suffix) }
+func (stringFuncs) TrimSpace(s string) string            { return strings.TrimSpace(s) }
+func (stringFuncs) ReplaceAll(s, old, new string) string { return strings.ReplaceAll(s, old, new) }
+
+type pathFuncs struct{}
+
+func (pathFuncs) Base(p string) string        { return path.Base(p) }
+func (pathFuncs) Dir(p string) string         { return path.Dir(p) }
+func (pathFuncs) Join(elems ...string) string { return path.Join(elems...) }
+
+type timeFuncs struct{ now time.Time }
+
+func (tf timeFuncs) Now() time.Time { return tf.now }
+
+type utilFuncs struct{}
+
+func (utilFuncs) Slice(values ...interface{}) []interface{} { return values }
+
+func (utilFuncs) Map(values ...interface{}) (map[string]interface{}, error) {
 	if len(values)%2 != 0 {
 		return nil, errors.New("dict: must have even number of arguments")
 	}
@@ -81,173 +66,7 @@ func dict(values ...interface{}) (map[string]interface{}, error) {
 	return dict, nil
 }
 
-func (fc *functionContext) updateModTime(fpath string) error {
-	fi, err := os.Stat(fpath)
-	if err != nil {
-		return err
-	}
-	fc.modTime = maxTime(fc.modTime, fi.ModTime())
-	return nil
-}
-
-func (fc *functionContext) toFilePath(upath string) string {
-	if !strings.HasPrefix(upath, "/") {
-		upath = path.Join(fc.udir, upath)
-	}
-	return fc.site.toFilePath(upath)
-}
-
-func (fc *functionContext) toURLPath(abs bool, fpath string) (string, error) {
-	if abs {
-		p, err := filepath.Rel(fc.site.dir, fpath)
-		if err != nil {
-			return "", err
-		}
-		return "/" + filepath.ToSlash(p), nil
-	}
-
-	p, err := filepath.Rel(fc.fdir, fpath)
-	if err != nil {
-		return "", err
-	}
-	return filepath.ToSlash(p), nil
-}
-
-func (fc *functionContext) globInternal(uglob string) (fpaths []string, upaths []string, err error) {
-	fglob := fc.toFilePath(uglob)
-	fpaths, err = filepath.Glob(fglob)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	upaths = make([]string, len(fpaths))
-	abs := strings.HasPrefix(uglob, "/")
-	for i, fpath := range fpaths {
-		upaths[i], err = fc.toURLPath(abs, fpath)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	return fpaths, upaths, nil
-}
-
-func (fc *functionContext) glob(uglob string) ([]string, error) {
-	_, upaths, err := fc.globInternal(uglob)
-	return upaths, err
-}
-
-func (fc *functionContext) include(upath string) (string, error) {
-	fpath := fc.toFilePath(upath)
-	fc.updateModTime(fpath)
-	b, err := ioutil.ReadFile(fpath)
-	return string(b), err
-}
-
-func (fc *functionContext) includeCSS(upath string) (htemplate.CSS, error) {
-	s, err := fc.include(upath)
-	return htemplate.CSS(s), err
-}
-
-func (fc *functionContext) includeHTML(upath string) (htemplate.HTML, error) {
-	s, err := fc.include(upath)
-	return htemplate.HTML(s), err
-}
-
-func (fc *functionContext) includeHTMLAttr(upath string) (htemplate.HTMLAttr, error) {
-	s, err := fc.include(upath)
-	return htemplate.HTMLAttr(s), err
-}
-
-func (fc *functionContext) includeJS(upath string) (htemplate.JS, error) {
-	s, err := fc.include(upath)
-	return htemplate.JS(s), err
-}
-
-func (fc *functionContext) includeJSStr(upath string) (htemplate.JSStr, error) {
-	s, err := fc.include(upath)
-	return htemplate.JSStr(s), err
-}
-
-func (fc *functionContext) readJSON(upath string) (interface{}, error) {
-	fpath := fc.toFilePath(upath)
-	fc.updateModTime(fpath)
-	f, err := os.Open(fpath)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	var v interface{}
-	err = json.NewDecoder(f).Decode(&v)
-	return v, err
-}
-
-func (fc *functionContext) readPage(upath string) (*Page, error) {
-	if strings.HasSuffix(upath, "/") {
-		upath += "index.html"
-	}
-
-	fpath := fc.toFilePath(upath)
-	fc.updateModTime(fpath)
-
-	if strings.HasSuffix(upath, "/index.html") {
-		upath = upath[:len(upath)-len("index.html")]
-	}
-
-	p := &Page{Path: upath}
-	_, _, err := readFileWithFrontMatter(fpath, p)
-	return p, err
-}
-
-func (fc *functionContext) readPages(uglob string, options ...string) ([]*Page, error) {
-	if strings.HasSuffix(uglob, "/") {
-		uglob += "index.html"
-	}
-
-	fpaths, upaths, err := fc.globInternal(uglob)
-	if err != nil {
-		return nil, err
-	}
-
-	var pages []*Page
-	for i, fpath := range fpaths {
-		upath := upaths[i]
-
-		fc.updateModTime(fpath)
-		if strings.HasSuffix(upath, "/index.html") {
-			upath = upath[:len(upath)-len("index.html")]
-		}
-
-		page := &Page{Path: upath}
-		_, _, err := readFileWithFrontMatter(fpath, page)
-		if err != nil {
-			return nil, err
-		}
-		pages = append(pages, page)
-	}
-
-	for _, option := range options {
-		switch {
-		case option == "sort:-Created":
-			sort.Slice(pages, func(i, j int) bool {
-				return pages[j].Created.Before(pages[i].Created)
-			})
-		case strings.HasPrefix(option, "limit:"):
-			s := option[len("limit:"):]
-			n, err := strconv.Atoi(s)
-			if err != nil {
-				return nil, fmt.Errorf("readPages: invalid limit %q", s)
-			}
-			if n < len(pages) {
-				pages = pages[:n]
-			}
-		default:
-			return nil, fmt.Errorf("readPages: invalid option %q", option)
-		}
-	}
-
-	return pages, nil
-}
+type imageFuncs struct{ site *site }
 
 type Image struct {
 	Width  int
@@ -259,8 +78,9 @@ func (img *Image) SrcWidthHeight() htemplate.HTMLAttr {
 	return htemplate.HTMLAttr(fmt.Sprintf(`src="%s" width="%d" height="%d"`, img.Src, img.Width, img.Height))
 }
 
-func (fc *functionContext) readImage(upath string) (*Image, error) {
-	config, err := readImageConfig(fc.toFilePath(upath))
+func (f imageFuncs) Read(pageDir string, upath string) (*Image, error) {
+	fpath := f.site.filePath(StaticDir, pageDir, upath)
+	config, err := readImageConfig(fpath)
 	return &Image{Src: upath, Width: config.Width, Height: config.Height}, err
 }
 
@@ -269,15 +89,14 @@ type ImageSrcSet struct {
 	SrcSet string
 }
 
-func (fc *functionContext) readImageSrcSet(uglob string, maxWidth int, maxHeight int) (*ImageSrcSet, error) {
-
-	fpaths, upaths, err := fc.globInternal(uglob)
+func (f imageFuncs) ReadSrcSet(pageDir string, upattern string, maxWidth int, maxHeight int) (*ImageSrcSet, error) {
+	fpaths, upaths, err := f.site.fileGlob(StaticDir, pageDir, upattern)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(fpaths) == 0 {
-		return nil, fmt.Errorf("%s - no images found for %s", fc.fname, uglob)
+		return nil, fmt.Errorf("no images found for %s (%s)", upattern, f.site.filePath(StaticDir, pageDir, upattern))
 	}
 
 	configs := make([]image.Config, len(fpaths))
@@ -351,4 +170,118 @@ func readImageConfig(fpath string) (image.Config, error) {
 		err = fmt.Errorf("error reading %s: %w", fpath, err)
 	}
 	return config, err
+}
+
+type pageFuncs struct{ site *site }
+type pageOption func(*pageOptions)
+type pageOptions struct {
+	lessFn  func(a, b *Page) bool
+	reverse bool
+	limit   int
+}
+
+func (pf pageFuncs) Read(pageDir string, upath string) (*Page, error) {
+	// TODO: require current page path as prefox of upath.
+	if strings.HasSuffix(upath, "/") {
+		upath += "index.html"
+	}
+
+	p := pf.site.pages[upath]
+	if p == nil {
+		return nil, fmt.Errorf("page %q not found", upath)
+	}
+
+	pCopy := *p
+	pCopy.Path = upath
+	return &pCopy, nil
+}
+
+var pageLessFuncs = map[string]func(a, b *Page) bool{
+	"created": func(a, b *Page) bool { return a.Created.Before(b.Created) },
+}
+
+func (pf pageFuncs) Limit(n int) pageOption {
+	return func(o *pageOptions) { o.limit = n }
+
+}
+func (pf pageFuncs) Sort(field string) (pageOption, error) {
+	if field == "" {
+		return nil, nil
+	}
+
+	reverse := false
+	if strings.HasPrefix(field, "-") {
+		reverse = true
+		field = field[1:]
+	}
+	fn := pageLessFuncs[field]
+	if fn == nil {
+		return nil, fmt.Errorf("sort by %q not supported", field)
+	}
+	return func(o *pageOptions) {
+		o.lessFn = fn
+		o.reverse = reverse
+	}, nil
+}
+
+func (pf pageFuncs) Glob(pageDir string, upattern string, options ...pageOption) ([]*Page, error) {
+
+	var o pageOptions
+	for _, fn := range options {
+		if fn != nil {
+			fn(&o)
+		}
+	}
+
+	if strings.HasSuffix(upattern, "/") {
+		upattern += "index.html"
+	}
+
+	if !strings.HasPrefix(upattern, "/") {
+		upattern = path.Join(pageDir, upattern)
+	}
+
+	// TODO: require current page directory as prefix of upattern.
+
+	var pages []*Page
+	for upath, page := range pf.site.pages {
+		matched, err := path.Match(upattern, upath)
+		if err != nil {
+			return nil, err
+		}
+		if !matched {
+			continue
+		}
+		pages = append(pages, page)
+	}
+
+	if o.lessFn != nil {
+		var lessFn func(a, b int) bool
+		if o.reverse {
+			lessFn = func(a, b int) bool { return o.lessFn(pages[b], pages[a]) }
+		} else {
+			lessFn = func(a, b int) bool { return o.lessFn(pages[a], pages[b]) }
+		}
+		sort.Slice(pages, lessFn)
+	}
+
+	if o.limit > 0 {
+		if o.limit < len(pages) {
+			pages = pages[:o.limit]
+		}
+	} else if o.limit < 0 {
+		if o.limit < len(pages) {
+			pages = pages[len(pages)-o.limit:]
+		}
+	}
+
+	// Copy pages so we can scribble on the page path.
+	pageCopies := make([]Page, len(pages))
+	for i, p := range pages {
+		pageCopies[i] = *p
+		pageCopies[i].Path = shortPath(pageDir, p.Path)
+		pages[i] = &pageCopies[i]
+	}
+
+	return pages, nil
 }
