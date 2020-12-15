@@ -36,7 +36,8 @@ type Page struct {
 }
 
 type actionContext struct {
-	*Page
+	// The page's directory. Use for resolving relative paths.
+	Dir string
 
 	// Used to jump over template execution errors.
 	err error
@@ -153,7 +154,7 @@ func (s *site) processPage(r *Resource) error {
 					a.Location(lc), name)
 			}
 			ac := actionContext{
-				Page:   p,
+				Dir:    p.Dir,
 				action: a,
 				lc:     lc,
 			}

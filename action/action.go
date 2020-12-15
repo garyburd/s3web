@@ -12,8 +12,8 @@
 // An argument name consists of a letter or  _, followed by zero or more
 // letters, digits, _, ., :, or -.
 //
-// An argument value specification consists of optional whitespace,a =
-// character, optional whitespace, and an argument value.
+// An argument value specification consists of optional whitespace, an optional
+// + charecter, a = character, optional whitespace, and an argument value.
 //
 // An argument value consists of an unquoted argument value, a single-quoted
 // argument value,or a double-quoted argument value.

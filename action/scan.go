@@ -146,11 +146,19 @@ func (s *scanner) scanAction() (*Action, error) {
 			break
 		}
 
-		done, err = s.scanEqual()
+		pos := s.pos
+
+		plus, done, err := s.scanEqual()
 		if err != nil {
 			return nil, err
 		} else if done {
 			break
+		}
+
+		if plus {
+			if _, ok := a.Args[name]; !ok {
+				return nil, fmt.Errorf("%s: expected previous definition of %q of +=", s.loc(pos), name)
+			}
 		}
 
 		pos = s.pos
@@ -160,7 +168,13 @@ func (s *scanner) scanAction() (*Action, error) {
 			return nil, err
 		}
 
-		a.Args[name] = Value{Text: text, pos: pos}
+		if plus {
+			v := a.Args[name]
+			v.Text += text
+			a.Args[name] = v
+		} else {
+			a.Args[name] = Value{Text: text, pos: pos}
+		}
 	}
 	return a, nil
 }
@@ -219,26 +233,32 @@ func (s *scanner) scanArgumentName() (string, bool, error) {
 	}
 }
 
-func (s *scanner) scanEqual() (bool, error) {
+func (s *scanner) scanEqual() (bool, bool, error) {
 	pos := s.pos
 	s.skipSpace()
 
 	if bytes.HasPrefix(s.input[s.pos:], s.rightDelim) {
 		s.pos += len(s.rightDelim)
-		return true, nil
+		return false, true, nil
 	}
 
 	if s.pos >= len(s.input) {
-		return false, fmt.Errorf("%s: reached EOF looking for =", s.loc(pos))
+		return false, false, fmt.Errorf("%s: reached EOF looking for =", s.loc(pos))
 	}
 
 	r, _ := utf8.DecodeRune(s.input[s.pos:])
+	plus := r == '+'
+	if plus {
+		s.pos += len("+")
+		r, _ = utf8.DecodeRune(s.input[s.pos:])
+	}
+
 	if r != '=' {
-		return false, fmt.Errorf("%s: expected =, found %c", s.loc(pos), r)
+		return false, false, fmt.Errorf("%s: expected =, found %c", s.loc(pos), r)
 	}
 
 	s.pos += len("=")
-	return false, nil
+	return plus, false, nil
 }
 
 func (s *scanner) scanArgumentValue() (string, error) {

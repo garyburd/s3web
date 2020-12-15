@@ -19,7 +19,7 @@ var parserTests = []struct {
         and the second line
         <%a 
         foo="bar"%>
-        <% b quux="baz" %>
+        <% b quux="b" quux+="a" quux += "z"  %>
         and the fourth line
         `,
 		[]string{
