@@ -1,6 +1,7 @@
 package site
 
 import (
+	"crypto/md5"
 	"errors"
 	"fmt"
 	htemplate "html/template"
@@ -8,6 +9,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"math"
 	"os"
 	"path"
@@ -17,11 +19,11 @@ import (
 )
 
 func (site *site) templateFuncs() map[string]interface{} {
-	image := imageFuncs{site}
+	static := staticFuncs{site}
 	page := pageFuncs{site}
 	time := timeFuncs{time.Now()} // snap time once for consitency across pages.
 	return map[string]interface{}{
-		"image":   func() imageFuncs { return image },
+		"static":  func() staticFuncs { return static },
 		"page":    func() pageFuncs { return page },
 		"path":    func() pathFuncs { return pathFuncs{} },
 		"strings": func() stringFuncs { return stringFuncs{} },
@@ -66,7 +68,25 @@ func (utilFuncs) Map(values ...interface{}) (map[string]interface{}, error) {
 	return dict, nil
 }
 
-type imageFuncs struct{ site *site }
+type staticFuncs struct{ site *site }
+
+func (sf staticFuncs) VersionedPath(pageDir string, upath string) (string, error) {
+	fpath := sf.site.filePath(StaticDir, pageDir, upath)
+	if p, ok := sf.site.versionedPaths[fpath]; ok {
+		return p, nil
+	}
+	f, err := os.Open(fpath)
+	if err != nil {
+		return "", nil
+	}
+	defer f.Close()
+	h := md5.New()
+	io.Copy(h, f)
+	s := h.Sum(nil)
+	p := fmt.Sprintf("%s?v=%x", upath, s[:])
+	sf.site.versionedPaths[fpath] = p
+	return p, nil
+}
 
 type Image struct {
 	Width  int
@@ -78,8 +98,8 @@ func (img *Image) SrcWidthHeight() htemplate.HTMLAttr {
 	return htemplate.HTMLAttr(fmt.Sprintf(`src="%s" width="%d" height="%d"`, img.Src, img.Width, img.Height))
 }
 
-func (f imageFuncs) Read(pageDir string, upath string) (*Image, error) {
-	fpath := f.site.filePath(StaticDir, pageDir, upath)
+func (sf staticFuncs) ReadImage(pageDir string, upath string) (*Image, error) {
+	fpath := sf.site.filePath(StaticDir, pageDir, upath)
 	config, err := readImageConfig(fpath)
 	return &Image{Src: upath, Width: config.Width, Height: config.Height}, err
 }
@@ -89,14 +109,14 @@ type ImageSrcSet struct {
 	SrcSet string
 }
 
-func (f imageFuncs) ReadSrcSet(pageDir string, upattern string, maxWidth int, maxHeight int) (*ImageSrcSet, error) {
-	fpaths, upaths, err := f.site.fileGlob(StaticDir, pageDir, upattern)
+func (sf staticFuncs) ReadImageSrcSet(pageDir string, upattern string, maxWidth int, maxHeight int) (*ImageSrcSet, error) {
+	fpaths, upaths, err := sf.site.fileGlob(StaticDir, pageDir, upattern)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(fpaths) == 0 {
-		return nil, fmt.Errorf("no images found for %s (%s)", upattern, f.site.filePath(StaticDir, pageDir, upattern))
+		return nil, fmt.Errorf("no images found for %s (%s)", upattern, sf.site.filePath(StaticDir, pageDir, upattern))
 	}
 
 	configs := make([]image.Config, len(fpaths))

@@ -123,6 +123,10 @@ func (s *site) processPage(r *Resource) error {
 		Title: path.Base(strings.TrimSuffix(r.Path, "/index.html")),
 	}
 
+	if strings.HasSuffix(p.Path, "/index.html") {
+		p.Path = p.Path[:len(p.Path)-len("index.html")]
+	}
+
 	var layout *htemplate.Template
 	var body strings.Builder
 
@@ -186,7 +190,7 @@ func (s *site) processPage(r *Resource) error {
 		return fmt.Errorf("%s:1 %v", r.FilePath, err)
 	}
 
-	s.pages[p.Path] = p
+	s.pages[r.Path] = p
 	r.Data = data
 	r.Size = int64(len(r.Data))
 	r.ModTime = time.Time{}

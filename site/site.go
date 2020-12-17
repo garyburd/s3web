@@ -37,6 +37,8 @@ type site struct {
 
 	// Previously loaded pages.
 	pages map[string]*Page // Loaded pages.
+
+	versionedPaths map[string]string
 }
 
 func newSite(dir string, visitFn func(*Resource) error) *site {
@@ -48,6 +50,7 @@ func newSite(dir string, visitFn func(*Resource) error) *site {
 		visitFn:        visitFn,
 		reportedErrors: make(map[string]struct{}),
 		pages:          make(map[string]*Page),
+		versionedPaths: make(map[string]string),
 	}
 	var err error
 	s.loader, err = template.NewLoader(filepath.Join(s.dir, LayoutDir), s.templateFuncs())
