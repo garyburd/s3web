@@ -185,6 +185,9 @@ func (pf pageFuncs) Read(pageDir string, upath string) (*Page, error) {
 	if strings.HasSuffix(upath, "/") {
 		upath += "index.html"
 	}
+	if !strings.HasPrefix(upath, "/") {
+		upath = path.Join(pageDir, upath)
+	}
 
 	p := pf.site.pages[upath]
 	if p == nil {

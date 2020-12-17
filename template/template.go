@@ -198,6 +198,9 @@ type meta struct {
 	err error
 }
 
+// Import loads the templates from specified file into the current template.
+// The path is relative to the loader's directory. Templates in the current
+// file override imported templates.
 func (m *meta) Import(path string) (string, error) {
 	fpath := filepath.Join(m.loader.dir, filepath.FromSlash(path))
 	trees, err := m.loader.getTrees(fpath, m.inflight)
@@ -217,7 +220,14 @@ func (m *meta) Import(path string) (string, error) {
 	return "", nil
 }
 
-func (m *meta) Include(name string, path string) (string, error) {
+// Include includes specified file as a template. The path is relative the
+// loader's directory. The name is the specified name or the file path when the
+// name is the empty string.
+func (m *meta) Include(path string, name string) (string, error) {
+	if name == "" {
+		name = path
+	}
+
 	fpath := filepath.Join(m.loader.dir, filepath.FromSlash(path))
 	p, err := ioutil.ReadFile(fpath)
 	if err != nil {

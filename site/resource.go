@@ -35,11 +35,12 @@ type Resource struct {
 	// Size in bytes
 	Size int64
 
-	// One or both of FilePath and Data are set.
 	// FilePath is path to resource on disk.
-	// Data is the actual resource data.
 	FilePath string
-	Data     []byte
+
+	// Data is the page data. If set, data overrides the resource data on
+	// stored on disk.
+	Data []byte
 
 	// Redirect to this path when set.
 	Redirect string

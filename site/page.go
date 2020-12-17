@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/garyburd/staticsite/action"
+	"github.com/garyburd/staticsite/html"
 )
 
 type Page struct {
@@ -104,7 +105,7 @@ func (p *Page) set(a *action.Action, lc *action.LocationContext) error {
 		case "layout":
 			// handled in caller.
 		default:
-			return fmt.Errorf("%s: unknown argument %q", a.Location(lc), k)
+			return fmt.Errorf("%s: unknown argument %q", v.Location(lc), k)
 		}
 	}
 	return nil
@@ -173,15 +174,20 @@ func (s *site) processPage(r *Resource) error {
 	if layout == nil {
 		buf.WriteString(body.String())
 	} else {
-		p.Content = htemplate.HTML(strings.TrimSpace(body.String()))
+		p.Content = htemplate.HTML(body.String())
 		err = layout.Execute(&buf, p)
 		if err != nil {
 			return err
 		}
 	}
 
+	data, err := html.Minify(buf.Bytes())
+	if err != nil {
+		return fmt.Errorf("%s:1 %v", r.FilePath, err)
+	}
+
 	s.pages[p.Path] = p
-	r.Data = append(bytes.TrimSpace(buf.Bytes()), '\n')
+	r.Data = data
 	r.Size = int64(len(r.Data))
 	r.ModTime = time.Time{}
 	return nil
