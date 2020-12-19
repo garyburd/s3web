@@ -1,6 +1,5 @@
-package site
-
-// Utilities for tools.
+// Common definitions and utilties for commands and the site.
+package common
 
 import (
 	"bytes"
@@ -14,11 +13,11 @@ import (
 const (
 	ConfigDir = "config"
 	LayoutDir = "layout"
-	PageDir   = "content"
+	PageDir   = "page"
 	StaticDir = "static"
 )
 
-type Tool struct {
+type Command struct {
 	Name    string
 	FlagSet *flag.FlagSet
 	Usage   string

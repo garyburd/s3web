@@ -15,6 +15,7 @@ const (
 	metaName = "_"
 )
 
+// Loader loads HTML templates from files on disk.
 type Loader struct {
 	dir      string
 	funcs    map[string]interface{}
@@ -39,6 +40,8 @@ type templateCacheEntry struct {
 	err      error
 }
 
+// NewLoader creates a template loader.  The loader loads files from directory
+// dir using template functions funcs.
 func NewLoader(dir string, funcs map[string]interface{}) (*Loader, error) {
 	l := Loader{
 		dir:           dir,
@@ -86,7 +89,9 @@ var textTemplateBuiltinFuncs = []string{
 	"ne",
 }
 
-func (l *Loader) Get(path string) (*htemplate.Template, error) {
+// Load loads the template from path where path is relative to the loader's
+// directory.
+func (l *Loader) Load(path string) (*htemplate.Template, error) {
 	fpath := filepath.Join(l.dir, filepath.FromSlash(path))
 
 	l.templateMu.Lock()
@@ -220,9 +225,9 @@ func (m *meta) Import(path string) (string, error) {
 	return "", nil
 }
 
-// Include includes specified file as a template. The path is relative the
-// loader's directory. The name is the specified name or the file path when the
-// name is the empty string.
+// Include includes the specified file as a template. The path is relative the
+// loader's directory. The template name is the specified name or the file path
+// when the name is the empty string.
 func (m *meta) Include(path string, name string) (string, error) {
 	if name == "" {
 		name = path

@@ -17,10 +17,12 @@ package site
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
+
+	"github.com/garyburd/staticsite/common"
 )
 
 func isPageExt(name string) bool {
@@ -38,20 +40,8 @@ func (s *site) visitDirectory(fpath string, upath string, isPageDir bool) error 
 		return err
 	}
 
-	// Sort for consistent output. The index page is moved to the end so the
-	// index page can efficienlty query other pages in the same directory.
-	sort.Slice(names, func(i, j int) bool {
-		ni := names[i]
-		nj := names[j]
-		if ni == "index.html" {
-			return false
-		} else if nj == "index.html" {
-			return true
-		} else {
-			return ni < nj
-		}
-	})
-
+	var indexPage *Resource
+	var indexPages []*Resource
 	var pages []*Resource
 
 	for _, name := range names {
@@ -74,23 +64,44 @@ func (s *site) visitDirectory(fpath string, upath string, isPageDir bool) error 
 
 		r := &Resource{
 			FilePath: filePath,
-			Path:     upath + "/" + name,
 			ModTime:  fileInfo.ModTime(),
 			Size:     fileInfo.Size(),
 		}
 
-		// Hold pages until after child directories are visited so that pages
-		// in parent directories can efficiently query pages in child
-		// directories.
-		if isPageDir && isPageExt(name) {
-			// TODO: warn about ignored file?
-			pages = append(pages, r)
+		if !isPageDir {
+			if name == "index.html" {
+				r.Path = upath + "/"
+			} else {
+				r.Path = upath + "/" + name
+			}
+			if err := s.visitFile(r); err != nil {
+				return err
+			}
 			continue
 		}
 
-		if err := s.visitFile(r); err != nil {
-			return err
+		// Hold pages until after child directories are visited so that pages
+		// in parent directories can query pages in child directories.
+		//
+		// Apply page rename rules.
+		//
+		// Group according to allowed page queries.
+
+		if name == "index.html" {
+			r.Path = upath + "/"
+			indexPage = r
+		} else if strings.HasSuffix(name, ".index.html") {
+			r.Path = upath + "/" + name[:len(name)-len(".index.html")]
+			indexPages = append(indexPages, r)
+		} else if strings.HasSuffix(name, ".html") {
+			r.Path = upath + "/" + name[:len(name)-len(".html")] + "/"
+			pages = append(pages, r)
 		}
+	}
+
+	pages = append(pages, indexPages...)
+	if indexPage != nil {
+		pages = append(pages, indexPage)
 	}
 
 	for _, r := range pages {
@@ -99,7 +110,7 @@ func (s *site) visitDirectory(fpath string, upath string, isPageDir bool) error 
 			m := strings.TrimPrefix(err.Error(), "template: ")
 			if _, ok := s.reportedErrors[m]; !ok {
 				s.reportedErrors[m] = struct{}{}
-				fmt.Fprintln(os.Stderr, m)
+				fmt.Fprintln(s.errOut, m)
 			}
 			return nil
 		}
@@ -111,19 +122,19 @@ func (s *site) visitDirectory(fpath string, upath string, isPageDir bool) error 
 }
 
 func (s *site) visitFile(r *Resource) error {
-	if Verbose {
+	if common.Verbose {
 		fmt.Printf("File %s -> %s\n", r.FilePath, r.Path)
 	}
 	return s.visitFn(r)
 }
 
-func Visit(dir string, fn func(*Resource) error) error {
-	s := newSite(dir, fn)
-	err := s.visitDirectory(filepath.Join(s.dir, StaticDir), "", false)
+func Visit(dir string, errOut io.Writer, fn func(*Resource) error) error {
+	s := newSite(dir, errOut, fn)
+	err := s.visitDirectory(filepath.Join(s.dir, common.StaticDir), "", false)
 	if err != nil {
 		return err
 	}
-	err = s.visitDirectory(filepath.Join(s.dir, PageDir), "", true)
+	err = s.visitDirectory(filepath.Join(s.dir, common.PageDir), "", true)
 	if err != nil {
 		return err
 	}

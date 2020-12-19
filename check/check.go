@@ -17,13 +17,15 @@ package check
 import (
 	"flag"
 	"log"
+	"os"
 
+	"github.com/garyburd/staticsite/common"
 	"github.com/garyburd/staticsite/site"
 )
 
 var (
 	flagSet = flag.NewFlagSet("check", flag.ExitOnError)
-	Tool    = &site.Tool{
+	Command = &common.Command{
 		Name:    "check",
 		Usage:   "check [directory]",
 		FlagSet: flagSet,
@@ -32,7 +34,7 @@ var (
 )
 
 func run() {
-	err := site.Visit(flagSet.Arg(0), func(r *site.Resource) error { return nil })
+	err := site.Visit(flagSet.Arg(0), os.Stderr, func(r *site.Resource) error { return nil })
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -22,21 +22,22 @@ import (
 	"strings"
 
 	"github.com/garyburd/staticsite/check"
+	"github.com/garyburd/staticsite/common"
 	"github.com/garyburd/staticsite/s3"
 	"github.com/garyburd/staticsite/serve"
-	"github.com/garyburd/staticsite/site"
 )
 
-var tools = []*site.Tool{
-	serve.Tool,
-	s3.Tool,
-	check.Tool,
+var commands = []*common.Command{
+	serve.Command,
+	serve.ReloadCommand,
+	s3.Command,
+	check.Command,
 }
 
 func main() {
 	log.SetFlags(0)
 	flag.Usage = printUsage
-	flag.BoolVar(&site.Verbose, "v", false, "Verbose output.")
+	flag.BoolVar(&common.Verbose, "v", false, "Verbose output.")
 	flag.Parse()
 
 	args := flag.Args()
@@ -44,19 +45,19 @@ func main() {
 		flag.Usage()
 		return
 	}
-	for _, t := range tools {
-		if args[0] == t.Name {
-			t.FlagSet.Usage = func() {
-				if t.Help != "" {
-					log.Print(strings.TrimSpace(t.Help))
+	for _, c := range commands {
+		if args[0] == c.Name {
+			c.FlagSet.Usage = func() {
+				if c.Help != "" {
+					log.Print(strings.TrimSpace(c.Help))
 					log.Print("\n\n")
 				}
-				log.Println(t.Usage)
-				t.FlagSet.PrintDefaults()
+				log.Println(c.Usage)
+				c.FlagSet.PrintDefaults()
 				os.Exit(2)
 			}
-			t.FlagSet.Parse(args[1:])
-			t.Run()
+			c.FlagSet.Parse(args[1:])
+			c.Run()
 			return
 		}
 	}
@@ -65,7 +66,7 @@ func main() {
 
 func printUsage() {
 	var names []string
-	for _, t := range tools {
+	for _, t := range commands {
 		names = append(names, t.Name)
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", os.Args[0], strings.Join(names, " | "))

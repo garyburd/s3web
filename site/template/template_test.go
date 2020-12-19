@@ -26,7 +26,7 @@ func TestTemplate(t *testing.T) {
 	}
 
 	for _, tt := range templateTests {
-		templ, err := l.Get(tt.name)
+		templ, err := l.Load(tt.name)
 		if (err != nil) != tt.wantParseError {
 			t.Errorf("Parse(%q) returned error %v, want error = %v", tt.name, err, tt.wantParseError)
 			continue

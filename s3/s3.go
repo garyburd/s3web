@@ -15,14 +15,14 @@
 package s3
 
 import (
+	"bytes"
 	"crypto/md5"
 	"flag"
 	"fmt"
 	"log"
-	"mime"
-	"path"
+	"os"
 	"path/filepath"
-	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +31,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/cloudfront"
 	"github.com/aws/aws-sdk-go/service/s3"
 
+	"github.com/garyburd/staticsite/common"
+	"github.com/garyburd/staticsite/common/action"
 	"github.com/garyburd/staticsite/site"
 )
 
@@ -40,7 +42,7 @@ var (
 	force      = flagSet.Bool("f", false, "Force upload of all files")
 	invalidate = flagSet.Bool("i", true, "Invalidate cloudfront distribution")
 
-	Tool = &site.Tool{
+	Command = &common.Command{
 		Name:    "s3",
 		Usage:   "s3 [dir]",
 		FlagSet: flagSet,
@@ -48,21 +50,17 @@ var (
 	}
 )
 
-// config represents the JSON configuration file.
-type config struct {
-	Bucket                   string
-	Region                   string
-	MaxAge                   int
-	Unmanaged                []string
-	CloudFrontDistributionID string
-}
-
 // updater holds state neeed while updating S3.
 type updater struct {
-	dir    string
-	config config
-	s3     *s3.S3
-	cf     *cloudfront.CloudFront
+	dir string
+	s3  *s3.S3
+	cf  *cloudfront.CloudFront
+
+	bucket                   string
+	region                   string
+	maxAge                   int
+	unmanaged                []string
+	cloudFrontDistributionID string
 }
 
 func run() {
@@ -74,7 +72,8 @@ func run() {
 	}
 
 	u := updater{
-		dir: flagSet.Arg(0),
+		dir:    flagSet.Arg(0),
+		maxAge: 60 * 60,
 	}
 
 	if u.dir == "" {
@@ -85,15 +84,13 @@ func run() {
 		log.Fatal(err)
 	}
 
-	u.s3 = s3.New(sess, aws.NewConfig().WithRegion(u.config.Region))
+	u.s3 = s3.New(sess, aws.NewConfig().WithRegion(u.region))
 	u.cf = cloudfront.New(sess)
 
 	uploadResources, deletePaths, err := u.getResourcesToUpdate()
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	sortUploads(uploadResources)
 
 	var invalidatePath string
 	for _, r := range uploadResources {
@@ -113,7 +110,7 @@ func run() {
 		}
 	}
 
-	if !*dryRun && *invalidate && invalidatePath != "" && u.config.CloudFrontDistributionID != "" {
+	if !*dryRun && *invalidate && invalidatePath != "" && u.cloudFrontDistributionID != "" {
 		if strings.HasSuffix(invalidatePath, "/index.html") {
 			invalidatePath = invalidatePath[:len(invalidatePath)-len("index.html")]
 		}
@@ -134,34 +131,62 @@ func run() {
 		}
 	}
 
-	log.Printf("View the updated website at http://%s.s3-website-%s.amazonaws.com/", u.config.Bucket, u.config.Region)
+	log.Printf("View the updated website at http://%s.s3-website-%s.amazonaws.com/", u.bucket, u.region)
 }
 
 func (u *updater) readConfig() error {
-	fpath := filepath.Join(u.dir, filepath.FromSlash(site.ConfigDir), "s3.json")
+	fpath := filepath.Join(u.dir, filepath.FromSlash(common.ConfigDir), "s3.txt")
 
-	err := site.DecodeConfigFile(fpath, &u.config)
+	actions, lc, err := action.ParseFile(fpath)
 	if err != nil {
 		return err
 	}
 
-	if u.config.Bucket == "" {
+	for _, a := range actions {
+		switch a.Name {
+		case action.TextAction:
+			if b := bytes.TrimSpace(a.Text); len(b) != 0 {
+				return fmt.Errorf("%s: unknown text %q", a.Location(lc), b)
+			}
+		case "set":
+			for k, v := range a.Args {
+				switch k {
+				case "bucket":
+					u.bucket = v.Text
+				case "region":
+					u.region = v.Text
+				case "cloudFrontDistributionID":
+					u.cloudFrontDistributionID = v.Text
+				case "maxAge":
+					var err error
+					u.maxAge, err = strconv.Atoi(v.Text)
+					if err != nil {
+						return fmt.Errorf("%s: %w", v.Location(lc), err)
+					}
+				case "unmanged":
+					u.unmanaged = strings.Split(v.Text, ":")
+					for i, p := range u.unmanaged {
+						if !strings.HasSuffix(p, "/") {
+							u.unmanaged[i] = p + "/"
+						}
+					}
+				default:
+					return fmt.Errorf("%s: unknown argument %q", v.Location(lc), k)
+				}
+			}
+		default:
+			return fmt.Errorf("%s: unknown command %q", a.Location(lc), a.Name)
+		}
+	}
+
+	if u.bucket == "" {
 		return fmt.Errorf("%s:1: Bucket name not set", fpath)
 	}
 
-	if u.config.Region == "" {
+	if u.region == "" {
 		return fmt.Errorf("%s:1: Region name not set", fpath)
 	}
 
-	if u.config.MaxAge == 0 {
-		u.config.MaxAge = 60 * 60
-	}
-
-	for i, prefix := range u.config.Unmanaged {
-		if !strings.HasSuffix(prefix, "/") {
-			u.config.Unmanaged[i] = prefix + "/"
-		}
-	}
 	return nil
 }
 
@@ -170,7 +195,7 @@ func (u *updater) readObjects() (map[string]*s3.Object, error) {
 	var continuationToken *string
 	for {
 		out, err := u.s3.ListObjectsV2(&s3.ListObjectsV2Input{
-			Bucket:            aws.String(u.config.Bucket),
+			Bucket:            aws.String(u.bucket),
 			ContinuationToken: continuationToken,
 		})
 		if err != nil {
@@ -201,37 +226,44 @@ func (u *updater) getResourcesToUpdate() ([]*site.Resource, []string, error) {
 		return nil, nil, err
 	}
 
-	var uploadResources []*site.Resource
-	err = site.Visit(u.dir, func(r *site.Resource) error {
+	var (
+		newResources      []*site.Resource
+		modifiedResources []*site.Resource
+	)
+	err = site.Visit(u.dir, os.Stderr, func(r *site.Resource) error {
+		if strings.HasSuffix(r.Path, "/") {
+			r.Path = r.Path + "index.html"
+		}
 		key := r.Path[1:]
 		o, ok := objects[key]
 		if !ok {
 			r.UpdateReason = updateNew
+			newResources = append(newResources, r)
+			return nil
+		}
+		delete(objects, key)
+		if r.Data != nil {
+			switch {
+			case aws.StringValue(o.ETag) != fmt.Sprintf(`"%x"`, md5.Sum(r.Data)):
+				r.UpdateReason = updateHashChange
+			case *force:
+				r.UpdateReason = updateForce
+			default:
+				return nil
+			}
 		} else {
-			delete(objects, key)
-			if r.Data != nil {
-				switch {
-				case aws.StringValue(o.ETag) != fmt.Sprintf(`"%x"`, md5.Sum(r.Data)):
-					r.UpdateReason = updateHashChange
-				case *force:
-					r.UpdateReason = updateForce
-				default:
-					return nil
-				}
-			} else {
-				switch {
-				case r.Size != aws.Int64Value(o.Size):
-					r.UpdateReason = updateSizeChange
-				case r.ModTime.After(aws.TimeValue(o.LastModified)):
-					r.UpdateReason = updateTimeChange
-				case *force:
-					r.UpdateReason = updateForce
-				default:
-					return nil
-				}
+			switch {
+			case r.Size != aws.Int64Value(o.Size):
+				r.UpdateReason = updateSizeChange
+			case r.ModTime.After(aws.TimeValue(o.LastModified)):
+				r.UpdateReason = updateTimeChange
+			case *force:
+				r.UpdateReason = updateForce
+			default:
+				return nil
 			}
 		}
-		uploadResources = append(uploadResources, r)
+		modifiedResources = append(modifiedResources, r)
 		return nil
 	})
 	if err != nil {
@@ -244,14 +276,15 @@ func (u *updater) getResourcesToUpdate() ([]*site.Resource, []string, error) {
 delete:
 	for key := range objects {
 		path := "/" + key
-		for _, prefix := range u.config.Unmanaged {
+		for _, prefix := range u.unmanaged {
 			if strings.HasPrefix(path, prefix) {
 				continue delete
 			}
 		}
 		deletePaths = append(deletePaths, path)
 	}
-	return uploadResources, deletePaths, err
+
+	return append(newResources, modifiedResources...), deletePaths, err
 }
 
 func (u *updater) uploadResource(r *site.Resource) error {
@@ -261,12 +294,12 @@ func (u *updater) uploadResource(r *site.Resource) error {
 	}
 	defer f.Close()
 	input := &s3.PutObjectInput{
-		Bucket:       aws.String(u.config.Bucket),
+		Bucket:       aws.String(u.bucket),
 		Key:          aws.String(r.Path[1:]),
 		Body:         f,
 		ContentType:  aws.String(ct),
 		ACL:          aws.String("public-read"),
-		CacheControl: aws.String(fmt.Sprintf("public, max-age=%d", u.config.MaxAge)),
+		CacheControl: aws.String(fmt.Sprintf("public, max-age=%d", u.maxAge)),
 	}
 	if r.Redirect != "" {
 		input.WebsiteRedirectLocation = aws.String(r.Redirect)
@@ -277,7 +310,7 @@ func (u *updater) uploadResource(r *site.Resource) error {
 
 func (u *updater) deleteResource(p string) error {
 	_, err := u.s3.DeleteObject(&s3.DeleteObjectInput{
-		Bucket: aws.String(u.config.Bucket),
+		Bucket: aws.String(u.bucket),
 		Key:    aws.String(p[1:]),
 	})
 	return err
@@ -285,7 +318,7 @@ func (u *updater) deleteResource(p string) error {
 
 func (u *updater) invalidateDistribution(path string) error {
 	_, err := u.cf.CreateInvalidation(&cloudfront.CreateInvalidationInput{
-		DistributionId: aws.String(u.config.CloudFrontDistributionID),
+		DistributionId: aws.String(u.cloudFrontDistributionID),
 		InvalidationBatch: &cloudfront.InvalidationBatch{
 			CallerReference: aws.String(time.Now().String()),
 			Paths: &cloudfront.Paths{
@@ -295,52 +328,4 @@ func (u *updater) invalidateDistribution(path string) error {
 		},
 	})
 	return err
-}
-
-var lastTypes = map[string]bool{
-	"text/html":              true,
-	"text/css":               true,
-	"application/javascript": true,
-}
-
-// sortUploads sorts the resources to minimize breakage as resources are
-// uploaded.
-func sortUploads(resources []*site.Resource) {
-	sort.SliceStable(resources, func(i, j int) bool {
-
-		// Avoid dangling links by uploading new resources first.
-		ni := resources[i].UpdateReason == updateNew
-		nj := resources[j].UpdateReason == updateNew
-		if ni != nj {
-			if ni {
-				return true
-			} else if nj {
-				return false
-			}
-		}
-
-		// HTML, CSS and JavaScript files tend to have tighter
-		// dependencies than images and other resources. Upload
-		// HTML, CSS and JavaScript files together at the end.
-		ti := mime.TypeByExtension(path.Ext(resources[i].Path))
-		if k := strings.Index(ti, ";"); k > 0 {
-			ti = ti[:k]
-		}
-		tj := mime.TypeByExtension(path.Ext(resources[j].Path))
-		if k := strings.Index(tj, ";"); k > 0 {
-			tj = tj[:k]
-		}
-		li := lastTypes[ti]
-		lj := lastTypes[tj]
-
-		if li != lj {
-			if li {
-				return false
-			} else if lj {
-				return true
-			}
-		}
-
-		return false
-	})
 }

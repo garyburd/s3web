@@ -26,7 +26,7 @@ import (
 
 // Resource represents a resource on the site.
 type Resource struct {
-	// URI with leading slash
+	// URI with leading slash and no trailing index file name.
 	Path string
 
 	// Modification time
@@ -38,13 +38,14 @@ type Resource struct {
 	// FilePath is path to resource on disk.
 	FilePath string
 
-	// Data is the page data. If set, data overrides the resource data on
+	// Redirect requests to this URL.
+	Redirect string
+
+	// Data is the page data. If set, data overrides the resource data
 	// stored on disk.
 	Data []byte
 
-	// Redirect to this path when set.
-	Redirect string
-
+	// For use by commands.
 	UpdateReason string
 }
 
@@ -59,12 +60,9 @@ func (readSeekNopClose) Close() error { return nil }
 
 // Open opens an reader on the resource's data.
 func (r *Resource) Open() (reader ReadSeekCloser, contentType string, err error) {
-	ct := mime.TypeByExtension(path.Ext(r.Path))
-
 	if r.Data != nil {
-		if ct == "" {
-			ct = http.DetectContentType(r.Data)
-		}
+		// Assume that MIME type of data loaded from the content directory is text/html.
+		ct := "text/html; charset=utf-8"
 		return readSeekNopClose{bytes.NewReader(r.Data)}, ct, nil
 	}
 
@@ -73,6 +71,7 @@ func (r *Resource) Open() (reader ReadSeekCloser, contentType string, err error)
 		return nil, "", err
 	}
 
+	ct := mime.TypeByExtension(path.Ext(r.Path))
 	if ct == "" {
 		var buf [512]byte
 		n, _ := io.ReadFull(f, buf[:])

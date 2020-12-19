@@ -120,5 +120,5 @@ func appendMinText(dst []byte, src []byte) []byte {
 }
 
 func needsQuote(v []byte) bool {
-	return len(v) == 0 || bytes.IndexAny(v, "\"'`=<> \n\r\t\b") >= 0
+	return len(v) == 0 || bytes.ContainsAny(v, "\"'`=<> \n\r\t\b")
 }

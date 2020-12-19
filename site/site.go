@@ -15,11 +15,17 @@
 package site
 
 import (
+	"crypto/md5"
+	"fmt"
+	"io"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
-	"github.com/garyburd/staticsite/template"
+	"github.com/garyburd/staticsite/common"
+	"github.com/garyburd/staticsite/site/template"
 )
 
 type site struct {
@@ -29,46 +35,105 @@ type site struct {
 	// Template loader.
 	loader *template.Loader
 
-	// Key is text of reported error messages.  Used to filter duplicate messages.
+	// Key is text of reported error messages. Used to filter duplicate error messages.
 	reportedErrors map[string]struct{}
+
+	// Destination for error messages.
+	errOut io.Writer
 
 	// Visit function for walk.
 	visitFn func(*Resource) error // Visit function for walk.
 
 	// Previously loaded pages.
-	pages map[string]*Page // Loaded pages.
+	pagesMu sync.RWMutex
+	pages   map[string]*Page
 
-	versionedPaths map[string]string
+	fileHashesMu sync.Mutex
+	fileHashes   map[string]string
 }
 
-func newSite(dir string, visitFn func(*Resource) error) *site {
+func newSite(dir string, errOut io.Writer, visitFn func(*Resource) error) *site {
 	if dir == "" {
 		dir = "."
 	}
 	s := &site{
 		dir:            filepath.Clean(dir),
 		visitFn:        visitFn,
+		errOut:         errOut,
 		reportedErrors: make(map[string]struct{}),
 		pages:          make(map[string]*Page),
-		versionedPaths: make(map[string]string),
+		fileHashes:     make(map[string]string),
 	}
 	var err error
-	s.loader, err = template.NewLoader(filepath.Join(s.dir, LayoutDir), s.templateFuncs())
+	s.loader, err = template.NewLoader(filepath.Join(s.dir, common.LayoutDir), s.templateFuncs())
 	if err != nil {
 		panic(err)
 	}
 	return s
 }
 
-func (s *site) filePath(fdir string, udir string, upath string) string {
-	if !strings.HasPrefix(upath, "/") {
-		upath = path.Join(udir, upath)
+func (s *site) addPage(queryPath string, p *Page) {
+	s.pagesMu.Lock()
+	s.pages[queryPath] = p
+	s.pagesMu.Unlock()
+}
+
+func (s *site) getPage(upath string) *Page {
+	s.pagesMu.RLock()
+	p := s.pages[upath]
+	s.pagesMu.RUnlock()
+	return p
+}
+
+func (s *site) globPages(upattern string) ([]*Page, error) {
+	s.pagesMu.RLock()
+	defer s.pagesMu.RUnlock()
+
+	var pages []*Page
+	for upath, page := range s.pages {
+		matched, err := path.Match(upattern, upath)
+		if err != nil {
+			return nil, err
+		}
+		if !matched {
+			continue
+		}
+		pages = append(pages, page)
 	}
+	return pages, nil
+}
+
+func (s *site) getFileHash(fpath string) (string, error) {
+	s.fileHashesMu.Lock()
+	hash := s.fileHashes[fpath]
+	s.fileHashesMu.Unlock()
+	if hash != "" {
+		return hash, nil
+	}
+
+	f, err := os.Open(fpath)
+	if err != nil {
+		return "", nil
+	}
+	defer f.Close()
+	hasher := md5.New()
+	io.Copy(hasher, f)
+	sum := hasher.Sum(nil)
+	hash = fmt.Sprintf("%x", sum[:])
+
+	s.fileHashesMu.Lock()
+	s.fileHashes[fpath] = hash
+	s.fileHashesMu.Unlock()
+
+	return hash, nil
+}
+
+func (s *site) filePath(fdir string, upath string) string {
 	return filepath.Join(s.dir, fdir, filepath.FromSlash(upath))
 }
 
-func (s *site) fileGlob(fdir string, udir string, upattern string) (fpaths []string, upaths []string, err error) {
-	fpattern := s.filePath(fdir, udir, upattern)
+func (s *site) fileGlob(fdir string, upattern string) (fpaths []string, upaths []string, err error) {
+	fpattern := s.filePath(fdir, upattern)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -85,24 +150,24 @@ func (s *site) fileGlob(fdir string, udir string, upattern string) (fpaths []str
 		if err != nil {
 			return nil, nil, err
 		}
-		upaths[i] = shortPath(udir, "/"+filepath.ToSlash(p))
+		upaths[i] = "/" + filepath.ToSlash(p)
 	}
 	return fpaths, upaths, nil
 }
 
-func shortPath(udir string, p string) string {
-	if strings.HasSuffix(p, "/index.html") {
-		p = p[:len(p)-len("index.html")]
-	}
-	if udir == "" {
+func shortPath(upage string, p string) string {
+	if upage == "" {
 		return p
 	}
-	if udir == "/" {
+	if upage == "/" {
 		p = strings.TrimPrefix(p, "/")
-	} else if len(p) > len(udir) &&
-		p[:len(udir)] == udir &&
-		p[len(udir)] == '/' {
-		p = p[len(udir)+1:]
+	} else {
+		udir := path.Dir(upage)
+		if len(p) > len(udir) &&
+			p[:len(udir)] == udir &&
+			p[len(udir)] == '/' {
+			p = p[len(udir)+1:]
+		}
 	}
 	return p
 }

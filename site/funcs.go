@@ -1,7 +1,6 @@
 package site
 
 import (
-	"crypto/md5"
 	"errors"
 	"fmt"
 	htemplate "html/template"
@@ -9,13 +8,15 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
-	"io"
 	"math"
 	"os"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/garyburd/staticsite/common"
 )
 
 func (site *site) templateFuncs() map[string]interface{} {
@@ -68,24 +69,70 @@ func (utilFuncs) Map(values ...interface{}) (map[string]interface{}, error) {
 	return dict, nil
 }
 
+func (utilFuncs) SliceValues(slice interface{}) ([]*sliceElement, error) {
+	v := reflect.ValueOf(slice)
+	if v.Kind() != reflect.Slice {
+		return nil, fmt.Errorf("expected slice, got %T", slice)
+	}
+	result := make([]*sliceElement, v.Len())
+	for i := range result {
+		result[i] = &sliceElement{v, i}
+	}
+	return result, nil
+}
+
+type sliceElement struct {
+	v reflect.Value
+	i int
+}
+
+func (se *sliceElement) Value() interface{} {
+	return se.v.Index(se.i).Interface()
+}
+
+func (se *sliceElement) Index() int {
+	return se.i
+}
+
+func (se *sliceElement) First() bool {
+	return se.i == 0
+}
+
+func (se *sliceElement) Last() bool {
+	return se.i == se.v.Len()-1
+}
+
+func (se *sliceElement) Even() bool {
+	return se.i%2 == 0
+}
+
+func (se *sliceElement) Odd() bool {
+	return se.i%2 != 0
+}
+
+func (se *sliceElement) Previous() interface{} {
+	if se.i <= 0 {
+		return nil
+	}
+	return se.v.Index(se.i - 1).Interface()
+}
+
+func (se *sliceElement) Next() interface{} {
+	if se.i+1 >= se.v.Len() {
+		return nil
+	}
+	return se.v.Index(se.i + 1).Interface()
+}
+
 type staticFuncs struct{ site *site }
 
 func (sf staticFuncs) VersionedPath(pageDir string, upath string) (string, error) {
-	fpath := sf.site.filePath(StaticDir, pageDir, upath)
-	if p, ok := sf.site.versionedPaths[fpath]; ok {
-		return p, nil
-	}
-	f, err := os.Open(fpath)
+	fpath := sf.site.filePath(common.StaticDir, absPath(upath, upath))
+	h, err := sf.site.getFileHash(fpath)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
-	defer f.Close()
-	h := md5.New()
-	io.Copy(h, f)
-	s := h.Sum(nil)
-	p := fmt.Sprintf("%s?v=%x", upath, s[:])
-	sf.site.versionedPaths[fpath] = p
-	return p, nil
+	return fmt.Sprintf("%s?v=%s", upath, h), nil
 }
 
 type Image struct {
@@ -98,8 +145,8 @@ func (img *Image) SrcWidthHeight() htemplate.HTMLAttr {
 	return htemplate.HTMLAttr(fmt.Sprintf(`src="%s" width="%d" height="%d"`, img.Src, img.Width, img.Height))
 }
 
-func (sf staticFuncs) ReadImage(pageDir string, upath string) (*Image, error) {
-	fpath := sf.site.filePath(StaticDir, pageDir, upath)
+func (sf staticFuncs) ReadImage(upage string, upath string) (*Image, error) {
+	fpath := sf.site.filePath(common.StaticDir, absPath(upage, upath))
 	config, err := readImageConfig(fpath)
 	return &Image{Src: upath, Width: config.Width, Height: config.Height}, err
 }
@@ -109,14 +156,14 @@ type ImageSrcSet struct {
 	SrcSet string
 }
 
-func (sf staticFuncs) ReadImageSrcSet(pageDir string, upattern string, maxWidth int, maxHeight int) (*ImageSrcSet, error) {
-	fpaths, upaths, err := sf.site.fileGlob(StaticDir, pageDir, upattern)
+func (sf staticFuncs) ReadImageSrcSet(upage string, upattern string, maxWidth int, maxHeight int) (*ImageSrcSet, error) {
+	fpaths, upaths, err := sf.site.fileGlob(common.StaticDir, absPath(upage, upattern))
 	if err != nil {
 		return nil, err
 	}
 
 	if len(fpaths) == 0 {
-		return nil, fmt.Errorf("no images found for %s (%s)", upattern, sf.site.filePath(StaticDir, pageDir, upattern))
+		return nil, fmt.Errorf("no images found for %s (%s)", upattern, sf.site.filePath(common.StaticDir, absPath(upage, upattern)))
 	}
 
 	configs := make([]image.Config, len(fpaths))
@@ -126,6 +173,7 @@ func (sf staticFuncs) ReadImageSrcSet(pageDir string, upattern string, maxWidth 
 			return nil, err
 		}
 		configs[i] = config
+		upaths[i] = shortPath(upage, upaths[i])
 	}
 
 	return computeSrcSet(fpaths, upaths, configs, maxWidth, maxHeight)
@@ -200,23 +248,20 @@ type pageOptions struct {
 	limit   int
 }
 
-func (pf pageFuncs) Read(pageDir string, upath string) (*Page, error) {
-	// TODO: require current page path as prefox of upath.
-	if strings.HasSuffix(upath, "/") {
-		upath += "index.html"
-	}
-	if !strings.HasPrefix(upath, "/") {
-		upath = path.Join(pageDir, upath)
-	}
+type tempPage struct {
+	*Page
+	Path string
+}
 
-	p := pf.site.pages[upath]
+func (pf pageFuncs) Read(upage string, upath string) (*tempPage, error) {
+	// TODO: check for valid upaath
+
+	p := pf.site.getPage(absPath(upage, upath))
 	if p == nil {
 		return nil, fmt.Errorf("page %q not found", upath)
 	}
 
-	pCopy := *p
-	pCopy.Path = upath
-	return &pCopy, nil
+	return &tempPage{Page: p, Path: upath}, nil
 }
 
 var pageLessFuncs = map[string]func(a, b *Page) bool{
@@ -247,7 +292,8 @@ func (pf pageFuncs) Sort(field string) (pageOption, error) {
 	}, nil
 }
 
-func (pf pageFuncs) Glob(pageDir string, upattern string, options ...pageOption) ([]*Page, error) {
+func (pf pageFuncs) Glob(upage string, upattern string, options ...pageOption) ([]*tempPage, error) {
+	// TODO: check for valid pattern.
 
 	var o pageOptions
 	for _, fn := range options {
@@ -256,26 +302,10 @@ func (pf pageFuncs) Glob(pageDir string, upattern string, options ...pageOption)
 		}
 	}
 
-	if strings.HasSuffix(upattern, "/") {
-		upattern += "index.html"
-	}
-
-	if !strings.HasPrefix(upattern, "/") {
-		upattern = path.Join(pageDir, upattern)
-	}
-
-	// TODO: require current page directory as prefix of upattern.
-
-	var pages []*Page
-	for upath, page := range pf.site.pages {
-		matched, err := path.Match(upattern, upath)
-		if err != nil {
-			return nil, err
-		}
-		if !matched {
-			continue
-		}
-		pages = append(pages, page)
+	upattern = absPath(upage, upattern)
+	pages, err := pf.site.globPages(upattern)
+	if err != nil {
+		return nil, err
 	}
 
 	if o.lessFn != nil {
@@ -298,13 +328,22 @@ func (pf pageFuncs) Glob(pageDir string, upattern string, options ...pageOption)
 		}
 	}
 
-	// Copy pages so we can scribble on the page path.
-	pageCopies := make([]Page, len(pages))
+	result := make([]*tempPage, len(pages))
 	for i, p := range pages {
-		pageCopies[i] = *p
-		pageCopies[i].Path = shortPath(pageDir, p.Path)
-		pages[i] = &pageCopies[i]
+		result[i] = &tempPage{Page: p, Path: shortPath(upage, p.Path)}
 	}
 
-	return pages, nil
+	return result, nil
+}
+
+func absPath(upage string, upath string) string {
+	if strings.HasPrefix(upath, "/") {
+		return upath
+	}
+	slash := strings.HasSuffix(upath, "/")
+	upath = path.Join(path.Dir(upage), upath)
+	if slash {
+		upath += "/"
+	}
+	return upath
 }

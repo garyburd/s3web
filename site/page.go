@@ -10,10 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/garyburd/staticsite/action"
-	"github.com/garyburd/staticsite/html"
+	"github.com/garyburd/staticsite/common/action"
+	"github.com/garyburd/staticsite/site/html"
+	"github.com/garyburd/staticsite/site/scratch"
 )
 
+// Page represents the meta data for a page.
 type Page struct {
 	// Title is the page's title.
 	Title string
@@ -30,55 +32,65 @@ type Page struct {
 	// Page path.
 	Path string
 
-	// The page's directory. Use for resolving relative paths.
-	Dir string
+	// Scratch data with page scope.
+	Scratch *scratch.Scratch
 
 	Content htemplate.HTML
 }
 
-type actionContext struct {
-	// The page's directory. Use for resolving relative paths.
-	Dir string
+// templateActionData is the data for executing template actions.
+type templateActionData struct {
+	// Path of the current page.
+	Path string
+
+	// Scratch data with page scope.
+	Scratch *scratch.Scratch
 
 	// Used to jump over template execution errors.
 	err error
 
+	// Location context for the page.
 	lc *action.LocationContext
 
+	// The current action.
 	action *action.Action
 }
 
-func (ac *actionContext) fatal(err error) error {
-	ac.err = err
+func (ad *templateActionData) fatal(err error) error {
+	ad.err = err
 	return err
 }
 
-func (ac *actionContext) requiredAgumentNotFound(name string) error {
-	return ac.fatal(fmt.Errorf("%s: required argument %q not found", ac.action.Location(ac.lc), name))
+func (ad *templateActionData) requiredAgumentNotFound(name string) error {
+	return ad.fatal(fmt.Errorf("%s: required argument %q not found", ad.action.Location(ad.lc), name))
 }
 
-func (ac *actionContext) String(name string, def ...string) (string, error) {
-	v, ok := ac.action.Args[name]
+// String returns argument with given name as a string. If the argument is
+// missing, String return an error or def if specified.
+func (ad *templateActionData) String(name string, def ...string) (string, error) {
+	v, ok := ad.action.Args[name]
 	if !ok {
 		if len(def) == 0 {
-			return "", ac.requiredAgumentNotFound(name)
+			return "", ad.requiredAgumentNotFound(name)
 		}
 		return def[0], nil
 	}
 	return v.Text, nil
 }
 
-func (ac *actionContext) Int(name string, def ...int) (int, error) {
-	v, ok := ac.action.Args[name]
+// String returns argument with given name as an int. If the argument is
+// missing, Int return an error or def if specified.
+func (ad *templateActionData) Int(name string, def ...int) (int, error) {
+	v, ok := ad.action.Args[name]
 	if !ok {
 		if len(def) == 0 {
-			return 0, ac.requiredAgumentNotFound(name)
+			return 0, ad.requiredAgumentNotFound(name)
 		}
 		return def[0], nil
 	}
 	i, err := strconv.Atoi(v.Text)
 	if err != nil {
-		return 0, ac.fatal(fmt.Errorf("%s: %w", v.Location(ac.lc), err))
+		return 0, ad.fatal(fmt.Errorf("%s: %w", v.Location(ad.lc), err))
 	}
 	return i, nil
 }
@@ -102,6 +114,11 @@ func (p *Page) set(a *action.Action, lc *action.LocationContext) error {
 			if err != nil {
 				return fmt.Errorf("%s: %w", v.Location(lc), err)
 			}
+		case "path":
+			if !strings.HasPrefix(v.Text, "/") {
+				return fmt.Errorf(`%s: page path must start with "/"`, v.Location(lc))
+			}
+			p.Path = v.Text
 		case "layout":
 			// handled in caller.
 		default:
@@ -112,19 +129,18 @@ func (p *Page) set(a *action.Action, lc *action.LocationContext) error {
 }
 
 func (s *site) processPage(r *Resource) error {
+
+	scratch := scratch.New()
+
+	p := &Page{
+		Path:    r.Path,
+		Title:   path.Base(r.Path),
+		Scratch: scratch,
+	}
+
 	actions, lc, err := action.ParseFile(r.FilePath)
 	if err != nil {
 		return err
-	}
-
-	p := &Page{
-		Path:  r.Path,
-		Dir:   path.Dir(r.Path),
-		Title: path.Base(strings.TrimSuffix(r.Path, "/index.html")),
-	}
-
-	if strings.HasSuffix(p.Path, "/index.html") {
-		p.Path = p.Path[:len(p.Path)-len("index.html")]
 	}
 
 	var layout *htemplate.Template
@@ -139,7 +155,7 @@ func (s *site) processPage(r *Resource) error {
 				return err
 			}
 			if v, ok := a.Args["layout"]; ok {
-				layout, err = s.loader.Get(v.Text)
+				layout, err = s.loader.Load(v.Text)
 				if err != nil {
 					if os.IsNotExist(err) {
 						err = fmt.Errorf("%s: %w", v.Location(lc), err)
@@ -158,14 +174,15 @@ func (s *site) processPage(r *Resource) error {
 				return fmt.Errorf("%s: template with name %q not found in layout",
 					a.Location(lc), name)
 			}
-			ac := actionContext{
-				Dir:    p.Dir,
-				action: a,
-				lc:     lc,
+			ad := templateActionData{
+				Path:    p.Path,
+				Scratch: scratch,
+				lc:      lc,
+				action:  a,
 			}
-			if err := t.Execute(&body, &ac); err != nil {
-				if ac.err != nil {
-					return ac.err
+			if err := t.Execute(&body, &ad); err != nil {
+				if ad.err != nil {
+					return ad.err
 				}
 				return fmt.Errorf("%s: %w", a.Location(lc), err)
 			}
@@ -185,14 +202,22 @@ func (s *site) processPage(r *Resource) error {
 		}
 	}
 
+	p.Scratch = nil
+
 	data, err := html.Minify(buf.Bytes())
 	if err != nil {
 		return fmt.Errorf("%s:1 %v", r.FilePath, err)
 	}
 
-	s.pages[r.Path] = p
 	r.Data = data
 	r.Size = int64(len(r.Data))
 	r.ModTime = time.Time{}
+
+	// The 'set' action can override the page's path. Use the original path in
+	// page queries.
+	queryPath := r.Path
+	r.Path = p.Path
+	s.addPage(queryPath, p)
+
 	return nil
 }
